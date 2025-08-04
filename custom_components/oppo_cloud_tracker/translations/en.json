@@ -1,0 +1,41 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "Configure OPPO Cloud Tracker",
+                "description": "Enter your Selenium Grid URL and HeyTap account credentials. For more help, visit: https://github.com/jiesou/oppo_cloud_tracker",
+                "data": {
+                    "selenium_grid_url": "Selenium Grid URL",
+                    "username": "HeyTap Username (+86)",
+                    "password": "HeyTap Password"
+                }
+            }
+        },
+        "error": {
+            "auth": "HeyTap username/password is incorrect.",
+            "connection": "Unable to connect to Selenium Grid or HeyTap service.",
+            "unknown": "An unknown error occurred during configuration."
+        },
+        "abort": {
+            "already_configured": "This HeyTap account is already configured."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Configure Options",
+                "description": "Configure additional options for OPPO Cloud Tracker",
+                "data": {
+                    "scan_interval": "Scan interval (seconds)"
+                }
+            }
+        }
+    },
+    "entity": {
+        "device_tracker": {
+            "oppo_device": {
+                "name": "OPPO Device Location"
+            }
+        }
+    }
+}

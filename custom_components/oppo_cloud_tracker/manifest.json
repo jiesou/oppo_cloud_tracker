@@ -1,0 +1,15 @@
+{
+  "domain": "oppo_cloud_tracker",
+  "name": "OPPO Cloud HeyTap Tracker",
+  "codeowners": [
+    "@jiesou"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/jiesou/oppo_cloud_tracker",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/jiesou/oppo_cloud_tracker/issues",
+  "requirements": [
+    "selenium==4.32.0"
+  ],
+  "version": "0.1.0"
+}
