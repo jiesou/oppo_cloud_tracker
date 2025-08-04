@@ -72,6 +72,10 @@ async def async_unload_entry(
     entry: OppoCloudConfigEntry,
 ) -> bool:
     """Handle removal of an entry."""
+    # Clean up WebDriver resources
+    if entry.runtime_data and entry.runtime_data.client:
+        await entry.runtime_data.client.async_cleanup()
+
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from homeassistant.components.device_tracker.config_entry import TrackerEntity
 from homeassistant.components.device_tracker.const import SourceType
 
+from .api import OppoCloudApiClientCommunicationError, OppoCloudApiClientError
 from .const import DOMAIN, LOGGER
 from .entity import OppoCloudEntity
 
@@ -147,6 +148,16 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
     async def async_locate_device(self) -> None:
         """Trigger device location update."""
         LOGGER.info("Triggering location update for device: %s", self._device_name)
-        # Call the find device API through coordinator
-        # This should trigger the "find my phone" feature on OPPO Cloud
-        await self.coordinator.async_request_refresh()
+        # Use the API client's locate device method to trigger "find my phone"
+        try:
+            client = self.coordinator.config_entry.runtime_data.client
+            await client.async_locate_device(self._device_id)
+            # Request a coordinator refresh to get updated data
+            await self.coordinator.async_request_refresh()
+        except (
+            OppoCloudApiClientError,
+            OppoCloudApiClientCommunicationError,
+        ) as exception:
+            LOGGER.error(
+                "Failed to locate device %s: %s", self._device_name, exception
+            )
