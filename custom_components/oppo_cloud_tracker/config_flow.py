@@ -9,22 +9,18 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.helpers import selector
-from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from slugify import slugify
 
 from .api import (
-    IntegrationBlueprintApiClient,
-    IntegrationBlueprintApiClientAuthenticationError,
-    IntegrationBlueprintApiClientCommunicationError,
-    IntegrationBlueprintApiClientError,
+    OppoCloudApiClient,
+    OppoCloudApiClientAuthenticationError,
+    OppoCloudApiClientCommunicationError,
+    OppoCloudApiClientError,
 )
-from .const import DEFAULT_SELENIUM_GRID_URL, DOMAIN, LOGGER
-
-# Configuration keys not in homeassistant.const
-CONF_SELENIUM_GRID_URL = "selenium_grid_url"
+from .const import CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL, DOMAIN, LOGGER
 
 
-class BlueprintFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
+class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for OPPO Cloud Tracker."""
 
     VERSION = 1
@@ -42,13 +38,13 @@ class BlueprintFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     password=user_input[CONF_PASSWORD],
                     selenium_url=user_input[CONF_SELENIUM_GRID_URL],
                 )
-            except IntegrationBlueprintApiClientAuthenticationError as exception:
+            except OppoCloudApiClientAuthenticationError as exception:
                 LOGGER.warning(exception)
                 _errors["base"] = "auth"
-            except IntegrationBlueprintApiClientCommunicationError as exception:
+            except OppoCloudApiClientCommunicationError as exception:
                 LOGGER.error(exception)
                 _errors["base"] = "connection"
-            except IntegrationBlueprintApiClientError as exception:
+            except OppoCloudApiClientError as exception:
                 LOGGER.exception(exception)
                 _errors["base"] = "unknown"
             else:
@@ -98,15 +94,14 @@ class BlueprintFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self, username: str, password: str, selenium_url: str
     ) -> None:
         """Validate credentials."""
-        # TODO: Implement actual credential testing with Selenium
-        # For now, just create a client to test basic connectivity
-        client = IntegrationBlueprintApiClient(
+        # Test Selenium Grid connection and basic functionality
+        client = OppoCloudApiClient(
             username=username,
             password=password,
-            session=async_create_clientsession(self.hass),
+            selenium_grid_url=selenium_url,
         )
-        # This will be replaced with actual HeyTap login test
-        await client.async_get_data()
+        # Test connection to Selenium Grid
+        await client.async_test_connection()
 
     @staticmethod
     @callback

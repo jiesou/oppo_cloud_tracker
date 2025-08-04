@@ -16,23 +16,19 @@ from homeassistant.const import (
     CONF_USERNAME,
     Platform,
 )
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_loaded_integration
 
-from .api import IntegrationBlueprintApiClient
-from .const import DOMAIN, LOGGER
-from .coordinator import BlueprintDataUpdateCoordinator
-from .data import IntegrationBlueprintData
+from .api import OppoCloudApiClient
+from .const import CONF_SELENIUM_GRID_URL, DOMAIN, LOGGER
+from .coordinator import OppoCloudDataUpdateCoordinator
+from .data import OppoCloudData
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from .data import IntegrationBlueprintConfigEntry
+    from .data import OppoCloudConfigEntry
 
 PLATFORMS: list[Platform] = [
-    Platform.SENSOR,
-    Platform.BINARY_SENSOR,
-    Platform.SWITCH,
     Platform.DEVICE_TRACKER,
 ]
 
@@ -40,23 +36,23 @@ PLATFORMS: list[Platform] = [
 # https://developers.home-assistant.io/docs/config_entries_index/#setting-up-an-entry
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: IntegrationBlueprintConfigEntry,
+    entry: OppoCloudConfigEntry,
 ) -> bool:
     """Set up this integration using UI."""
     # Get scan interval from options, default to 300 seconds (5 minutes)
     scan_interval = entry.options.get(CONF_SCAN_INTERVAL, 300)
 
-    coordinator = BlueprintDataUpdateCoordinator(
+    coordinator = OppoCloudDataUpdateCoordinator(
         hass=hass,
         logger=LOGGER,
         name=DOMAIN,
         update_interval=timedelta(seconds=scan_interval),
     )
-    entry.runtime_data = IntegrationBlueprintData(
-        client=IntegrationBlueprintApiClient(
+    entry.runtime_data = OppoCloudData(
+        client=OppoCloudApiClient(
             username=entry.data[CONF_USERNAME],
             password=entry.data[CONF_PASSWORD],
-            session=async_get_clientsession(hass),
+            selenium_grid_url=entry.data[CONF_SELENIUM_GRID_URL],
         ),
         integration=async_get_loaded_integration(hass, entry.domain),
         coordinator=coordinator,
@@ -73,7 +69,7 @@ async def async_setup_entry(
 
 async def async_unload_entry(
     hass: HomeAssistant,
-    entry: IntegrationBlueprintConfigEntry,
+    entry: OppoCloudConfigEntry,
 ) -> bool:
     """Handle removal of an entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -81,7 +77,7 @@ async def async_unload_entry(
 
 async def async_reload_entry(
     hass: HomeAssistant,
-    entry: IntegrationBlueprintConfigEntry,
+    entry: OppoCloudConfigEntry,
 ) -> None:
     """Reload config entry."""
     await hass.config_entries.async_reload(entry.entry_id)
