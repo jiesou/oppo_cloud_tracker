@@ -9,3 +9,6 @@ ATTRIBUTION = "Data provided by OPPO Cloud (HeyTap)"
 
 # Default values
 DEFAULT_SELENIUM_GRID_URL = "http://localhost:4444/wd/hub"
+
+# Configuration keys
+CONF_SELENIUM_GRID_URL = "selenium_grid_url"

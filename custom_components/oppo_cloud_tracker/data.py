@@ -9,17 +9,17 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.loader import Integration
 
-    from .api import IntegrationBlueprintApiClient
-    from .coordinator import BlueprintDataUpdateCoordinator
+    from .api import OppoCloudApiClient
+    from .coordinator import OppoCloudDataUpdateCoordinator
 
 
-type IntegrationBlueprintConfigEntry = ConfigEntry[IntegrationBlueprintData]
+type OppoCloudConfigEntry = ConfigEntry[OppoCloudData]
 
 
 @dataclass
-class IntegrationBlueprintData:
-    """Data for the Blueprint integration."""
+class OppoCloudData:
+    """Data for the OPPO Cloud integration."""
 
-    client: IntegrationBlueprintApiClient
-    coordinator: BlueprintDataUpdateCoordinator
+    client: OppoCloudApiClient
+    coordinator: OppoCloudDataUpdateCoordinator
     integration: Integration
