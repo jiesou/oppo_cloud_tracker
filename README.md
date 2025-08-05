@@ -1,37 +1,34 @@
 # OPPO Cloud HeyTap Tracker
 
-[![Open a repository in your Home Assistant HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jiesou&repository=oppo_cloud_tracker&category=integration)
+Use the [OPPO (HeyTap) Cloud](https://cloud.oppo.com) "Find My Phone" feature to locate OPPO/OnePlus devices and integrate them into Home Assistant as device tracker entities.
 
-Use the Device Find feature of OPPO (HeyTap) Cloud to locate OPPO/OnePlus devices and integrate them into Home Assistant as Device Tracker entities.
-
-[简体中文文档](README.zh.md) | [English Documentation](README.md)
-
-## ⚠️ Security Warning
-
-**This integration uses phone number and password for authentication. Password security cannot be guaranteed!** The integration automates the OPPO Cloud web interface using Selenium WebDriver, which means your credentials are processed by browser automation. Use at your own risk and consider using a dedicated account if possible.
+[简体中文文档](README.zh.md)
 
 ## Features
 
-This integration provides the following device information for your OPPO/OnePlus devices:
+This integration provides the following information for your OPPO/OnePlus devices:
 
-- **Device Model** - The model name of your device
-- **Location Name** - Human-readable address of the device location
-- **GPS Coordinates** - Latitude and longitude data
-- **Battery Level** - Current battery percentage
-- **Last Update Time** - When the device last reported its location
-- **Online Status** - Whether the device is currently online
-- **Multiple Device Support** - May support multiple devices (untested by author)
+- **Device model**
+- **Location name**
+- **GPS coordinates**
+- **Battery level**
+- **Last update time**
+- **Online status**
+– *Might* support multiple devices, but **not tested**
 
 ## Requirements
 
-This integration requires a **separate Selenium Grid instance** to operate. It uses Selenium WebDriver to automate the OPPO Cloud web interface since no official API is available.
+The integration works via Selenium/WebDriver and only supports login by phone number and password.
+
+**⚠️ Warning ⚠️: Password storage security is NOT guaranteed**
+
+A **separate [Selenium Grid](https://www.selenium.dev/documentation/grid)** instance is required.
 
 ### Selenium Grid Setup
 
-The recommended way to deploy Selenium Grid is using Docker with the `selenium/standalone-chrome` image.
+It is recommended to deploy Selenium Grid using the official Docker `selenium/standalone-chrome` image.
 
-Create a `docker-compose.yml` file:
-
+Example `docker-compose.yml`:
 ```yaml
 name: selenium
 services:
@@ -53,23 +50,11 @@ services:
     privileged: false
 ```
 
-Then run:
-```bash
-docker-compose up -d
-```
-
-For more information about Selenium Grid, visit: https://www.selenium.dev/documentation/grid/
-
 ## Installation
 
 ### Method 1: HACS (Recommended)
 
 [![Open a repository in your Home Assistant HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jiesou&repository=oppo_cloud_tracker&category=integration)
-
-1. Click the badge above or manually add this repository to HACS
-2. Search for "OPPO Cloud HeyTap Tracker"
-3. Install the integration
-4. Restart Home Assistant
 
 ### Method 2: Manual Installation
 
@@ -88,70 +73,43 @@ For more information about Selenium Grid, visit: https://www.selenium.dev/docume
 
 ### Step 2: Configure Connection
 
-You'll need to provide:
+You will need to provide:
 
-- **Selenium Grid URL**: The URL to your Selenium Grid instance
-  - Format: `http://[your_docker_hostname]:4444/wd/hub`
-  - Default: `http://localhost:4444/wd/hub`
+- **Selenium Grid URL**: The URL of your Selenium Grid instance
+  - Usually like: `http://[your_docker_hostname]:4444/wd/hub`
   - Make sure your Home Assistant instance can access the Docker container
-- **OPPO Phone Number**: Your OPPO account phone number (+86 only)
-- **OPPO Password**: Your OPPO account password
+- **OPPO Phone Number**: Your OPPO account phone number (**only +86 supported**)
+- **OPPO Password**: Your OPPO account password (**Warning again: password security is NOT guaranteed**)
 
-### Step 3: Configure Options (Optional)
-
-After adding the integration, you can configure additional options:
-
-- **Scan Interval**: How often to update device locations (default: 300 seconds / 5 minutes)
-  - Range: 30-3600 seconds
-  - ⚠️ **Be careful with power consumption!** Lower intervals require devices to report GPS more frequently
-
-### Step 4: Session Management
+After setup, you can also configure the scan interval (default: 300 seconds / 5 minutes).
 
 The integration creates a virtual switch called "Keep Selenium Session" to control session behavior:
 
 - **ON**: Keeps the Selenium session active between updates
-  - Allows higher refresh frequencies
-  - Requires devices to constantly report GPS (high battery drain)
+  - Allows higher refresh frequency
+  - Requires devices to continuously report GPS (high battery consumption)
   - Better for real-time tracking
-  
-- **OFF** (Default): Closes Selenium session after each update
+
+- **OFF** (default): Closes the Selenium session after each update
   - Restarts Selenium and re-logs into OPPO Cloud for each update
   - Lower battery impact on devices
   - Suitable for periodic location checks
 
-## Usage
+It also provides a `oppo_cloud_tracker.locate` service for manually triggering an immediate device location update in automations.
 
-Once configured, the integration will:
-
-1. Create device tracker entities for each discovered OPPO/OnePlus device
-2. Update device locations based on your configured scan interval
-3. Provide device information as entity attributes
-4. Allow manual location updates via the "Locate Devices" service
-
-### Available Services
-
-- **Locate Devices** (`oppo_cloud_tracker.locate`): Triggers an immediate update of all device locations
-
-## Troubleshooting
-
-### Common Issues
+## FAQ
 
 1. **Cannot connect to Selenium Grid**
    - Verify the Selenium Grid URL is correct
-   - Ensure Home Assistant can reach the Docker container
-   - Check that the Selenium Grid container is running
+   - Ensure Home Assistant can access the Docker container
+   - Check if the Selenium Grid container is running
 
 2. **OPPO login failed**
    - Verify your phone number and password are correct
    - Only +86 (China) phone numbers are supported
-   - Try logging in manually to OPPO Cloud website first
+   - Try logging in manually to the OPPO Cloud website first
 
-3. **Devices not appearing**
-   - Make sure devices are linked to your OPPO account
-   - Check that device location services are enabled
-   - Wait for the initial scan to complete
-
-4. **Strange errors or timeouts**
+3. **Strange errors or timeouts**
    - Restart the Selenium Grid Docker container:
      ```bash
      docker restart selenium-chrome
@@ -161,28 +119,11 @@ Once configured, the integration will:
      docker logs selenium-chrome
      ```
 
-### Debug Information
+### Tips & Tricks
 
 - Selenium Grid web interface: http://[your_docker_hostname]:7900 (VNC viewer)
 - Home Assistant logs will show integration activity under `custom_components.oppo_cloud_tracker`
 
-## Limitations
-
-- Only supports phone number + password authentication
-- Only supports +86 (China) phone numbers
-- Requires active internet connection for both Home Assistant and tracked devices
-- Password security cannot be guaranteed (browser automation)
-- Multiple device support is untested
-- May be affected by OPPO Cloud website changes
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## Disclaimer
 
-This integration is not affiliated with or endorsed by OPPO. It uses publicly available web interfaces and may stop working if OPPO changes their website. Use at your own risk.
+This integration is not affiliated with or endorsed by OPPO. It is based on publicly available web interfaces, and all actions on the website follow your configuration. If OPPO changes their website, the integration may stop working. Use at your own risk.
