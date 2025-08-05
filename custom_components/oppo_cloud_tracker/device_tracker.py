@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from .coordinator import OppoCloudDataUpdateCoordinator
+    from .data import OppoCloudDevice
 
 
 async def async_setup_entry(
@@ -35,14 +36,15 @@ async def async_setup_entry(
         return
 
     # Create device tracker entities for each device found
-    devices = coordinator.data.get("devices", [])
+    # coordinator.data is now list[OppoCloudDevice] directly
+    devices = coordinator.data
     entities = [
         OppoCloudDeviceTracker(
             coordinator=coordinator,
-            device_id=device["device_id"],
-            device_name=device["device_name"],
+            device_index=idx,
+            device=device,
         )
-        for device in devices
+        for idx, device in enumerate(devices)
     ]
 
     if entities:
@@ -57,14 +59,17 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
     def __init__(
         self,
         coordinator: OppoCloudDataUpdateCoordinator,
-        device_id: str,
-        device_name: str,
+        device_index: int,
+        device: OppoCloudDevice,
     ) -> None:
         """Initialize the device tracker."""
         super().__init__(coordinator)
+        self._device_index = device_index
+        self._device = device
+        # Generate a unique device ID based on device model and index
+        device_id = f"{device.device_model}_{device_index}"
         self._device_id = device_id
-        self._device_name = device_name
-        self._attr_name = device_name
+        self._attr_name = device.device_model
         self._attr_unique_id = f"{DOMAIN}_{device_id}_tracker"
 
     @property
@@ -76,11 +81,9 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
     @property
     def location_name(self) -> str | None:
         """Return the location name where the device was last seen."""
-        if self.coordinator.data:
-            devices = self.coordinator.data.get("devices", [])
-            for device in devices:
-                if device["device_id"] == self._device_id:
-                    return device.get("location_name")
+        if self.coordinator.data and self._device_index < len(self.coordinator.data):
+            device = self.coordinator.data[self._device_index]
+            return device.location_name
         return None
 
     @property
@@ -104,11 +107,9 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
     @property
     def is_connected(self) -> bool:
         """Return True if the device is connected."""
-        if self.coordinator.data:
-            devices = self.coordinator.data.get("devices", [])
-            for device in devices:
-                if device["device_id"] == self._device_id:
-                    return device.get("is_online", False)
+        if self.coordinator.data and self._device_index < len(self.coordinator.data):
+            device = self.coordinator.data[self._device_index]
+            return device.is_online
         return False
 
     @property
@@ -116,20 +117,14 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
         """Return the device state attributes."""
         attributes = {}
 
-        if self.coordinator.data:
-            devices = self.coordinator.data.get("devices", [])
-            for device in devices:
-                if device["device_id"] == self._device_id:
-                    # Add device-specific attributes
-                    if "last_seen" in device:
-                        attributes["last_seen"] = device["last_seen"]
+        if self.coordinator.data and self._device_index < len(self.coordinator.data):
+            device = self.coordinator.data[self._device_index]
 
-                    if "device_model" in device:
-                        attributes["device_model"] = device["device_model"]
+            # Add device-specific attributes from OppoCloudDevice
+            if device.last_seen:
+                attributes["last_seen"] = device.last_seen
 
-                    if "is_online" in device:
-                        attributes["is_online"] = device["is_online"]
-
-                    break
+            attributes["device_model"] = device.device_model
+            attributes["is_online"] = str(device.is_online)
 
         return attributes

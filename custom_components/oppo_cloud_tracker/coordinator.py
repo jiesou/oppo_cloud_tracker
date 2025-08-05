@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -15,16 +15,16 @@ from .api import (
 )
 
 if TYPE_CHECKING:
-    from .data import OppoCloudConfigEntry
+    from .data import OppoCloudConfigEntry, OppoCloudDevice
 
 
 # https://developers.home-assistant.io/docs/integration_fetching_data#coordinated-single-api-poll-for-data-for-all-entities
-class OppoCloudDataUpdateCoordinator(DataUpdateCoordinator):
+class OppoCloudDataUpdateCoordinator(DataUpdateCoordinator[list["OppoCloudDevice"]]):
     """Class to manage fetching data from the OPPO Cloud API."""
 
     config_entry: OppoCloudConfigEntry
 
-    async def _async_update_data(self) -> Any:
+    async def _async_update_data(self) -> list[OppoCloudDevice]:
         """Update data via library."""
         try:
             return await self.config_entry.runtime_data.client.async_get_data()
