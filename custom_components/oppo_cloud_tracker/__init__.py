@@ -10,26 +10,29 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+import voluptuous as vol
 from homeassistant.const import (
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
     Platform,
 )
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.loader import async_get_loaded_integration
 
 from .api import OppoCloudApiClient
-from .const import CONF_SELENIUM_GRID_URL, DOMAIN, LOGGER
+from .const import CONF_SELENIUM_GRID_URL, DOMAIN, LOGGER, SERVICE_LOCATE
 from .coordinator import OppoCloudDataUpdateCoordinator
 from .data import OppoCloudData
 
 if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import HomeAssistant, ServiceCall
 
     from .data import OppoCloudConfigEntry
 
 PLATFORMS: list[Platform] = [
     Platform.DEVICE_TRACKER,
+    Platform.SWITCH,
 ]
 
 
@@ -65,6 +68,24 @@ async def async_setup_entry(
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
+    # Register the locate service
+    async def async_locate_service(_: ServiceCall) -> None:
+        """Handle the locate service call."""
+        LOGGER.info("Locate service called, triggering device location update")
+        try:
+            await coordinator.async_refresh()
+        except Exception as err:
+            LOGGER.error("Failed to update device locations: %s", err)
+            error_msg = f"Failed to update device locations: {err}"
+            raise ServiceValidationError(error_msg) from err
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LOCATE,
+        async_locate_service,
+        schema=vol.Schema({}),
+    )
+
     return True
 
 
@@ -76,6 +97,9 @@ async def async_unload_entry(
     # Clean up WebDriver resources
     if entry.runtime_data and entry.runtime_data.client:
         await entry.runtime_data.client.async_cleanup()
+
+    # Remove the locate service
+    hass.services.async_remove(DOMAIN, SERVICE_LOCATE)
 
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 

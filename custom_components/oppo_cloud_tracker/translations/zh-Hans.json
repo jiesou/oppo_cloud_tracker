@@ -36,6 +36,17 @@
             "oppo_device": {
                 "name": "OPPO 设备位置"
             }
+        },
+        "switch": {
+            "keep_selenium_session": {
+                "name": "保持 Selenium 会话"
+            }
+        }
+    },
+    "services": {
+        "locate": {
+            "name": "定位设备",
+            "description": "立即触发从 OPPO Cloud 更新设备位置。"
         }
     }
 }
