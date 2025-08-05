@@ -39,7 +39,7 @@
         },
         "switch": {
             "keep_selenium_session": {
-                "name": "Keep OPPO Cloud Selenium Session"
+                "name": "Keep Selenium Session"
             }
         }
     },

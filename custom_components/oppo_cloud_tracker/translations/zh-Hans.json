@@ -39,7 +39,7 @@
         },
         "switch": {
             "keep_selenium_session": {
-                "name": "保持 OPPO Cloud Selenium 会话"
+                "name": "保持 Selenium 会话"
             }
         }
     },

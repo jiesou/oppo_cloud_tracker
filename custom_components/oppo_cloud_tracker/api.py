@@ -8,6 +8,7 @@ from selenium import webdriver
 from selenium.common.exceptions import (
     TimeoutException,
     WebDriverException,
+    JavascriptException,
 )
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.common.by import By
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from selenium.webdriver.remote.webelement import WebElement
+    from selenium.webdriver.remote.webdriver import WebDriver
 
 from custom_components.oppo_cloud_tracker.const import (
     CONF_OPPO_CLOUD_FIND_URL,
@@ -26,6 +28,8 @@ from custom_components.oppo_cloud_tracker.const import (
     LOGGER,
 )
 from custom_components.oppo_cloud_tracker.data import OppoCloudDevice
+
+from .gcj2wgs import gcj2wgs
 
 
 class OppoCloudApiClientError(Exception):
@@ -74,8 +78,7 @@ class OppoCloudApiClient:
         self._password = password
         self._selenium_grid_url = selenium_grid_url
         self._driver: webdriver.Remote | None = None
-        self._driver_initialized = False
-        self._keep_session = False  # Default to False for resource efficiency
+        self._keep_session = False
 
     def set_keep_selenium_session(self, *, keep_session: bool) -> None:
         """Set whether to keep the WebDriver session (synchronous version)."""
@@ -86,18 +89,18 @@ class OppoCloudApiClient:
         """Set whether to keep the WebDriver session between updates."""
         self._keep_session = keep_session
         # If disabling session keeping and we have an active session, clean it up
-        if not keep_session and self._driver is not None and self._driver_initialized:
+        if not keep_session and self._driver is not None:
             await self.async_cleanup()
 
     def _get_or_create_driver(self) -> webdriver.Remote:
         """Get existing WebDriver instance or create a new one."""
-        if self._driver is not None and self._driver_initialized:
+        if self._driver is not None:
             return self._driver
 
         try:
             # Set up Chrome options for headless mode
             chrome_options = ChromeOptions()
-            chrome_options.add_argument("--headless")
+            # chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
 
@@ -107,10 +110,8 @@ class OppoCloudApiClient:
                 command_executor=remote_connection,
                 options=chrome_options,
             )
-            self._driver_initialized = True
         except Exception:
             self._driver = None
-            self._driver_initialized = False
             raise
         return self._driver
 
@@ -131,7 +132,6 @@ class OppoCloudApiClient:
             pass
         finally:
             self._driver = None
-            self._driver_initialized = False
 
     async def async_login_oppo_cloud(self) -> None:
         """Log in to OPPO Cloud using Selenium."""
@@ -267,7 +267,7 @@ class OppoCloudApiClient:
         devices: list[OppoCloudDevice] = []
         # Find all device items
         device_items = devices_list_el.find_elements(By.CSS_SELECTOR, "ul > li")
-        for item in device_items:
+        for idx, item in enumerate(device_items):
             item.click()
             # To check device details
             device_detail_el = WebDriverWait(driver, 10).until(
@@ -275,7 +275,7 @@ class OppoCloudApiClient:
                     (By.CSS_SELECTOR, "div.panel-wrap > div.device-detail")
                 )
             )
-            devices.append(self._parse_single_device(device_detail_el))
+            devices.append(self._parse_single_device(driver, idx, device_detail_el))
             # Go back to the device list
             device_detail_el.find_element(
                 By.CSS_SELECTOR,
@@ -283,7 +283,9 @@ class OppoCloudApiClient:
             ).click()
         return devices
 
-    def _parse_single_device(self, device_el: WebElement) -> OppoCloudDevice:
+    def _parse_single_device(
+        self, driver: WebDriver, idx: int, device_el: WebElement
+    ) -> OppoCloudDevice:
         """Parse a single device element."""
         # Device model/name
         name_el = device_el.find_element(
@@ -305,9 +307,32 @@ class OppoCloudApiClient:
         else:
             location_name, last_seen = address_text, None
 
+        # Check battery level
+        battery_el = device_el.find_element(
+            By.CSS_SELECTOR, "div.info-item.info-state > div.info-battery > div.count"
+        )
+        battery_text = battery_el.text.strip()
+        battery_level = int(battery_text[:-1]) if battery_text.endswith("%") else 0
+        # Check lat/lng by exec js
+        gcj_lat = None
+        longitude = None
+        try:
+            point = driver.execute_script(
+                "return window.$findVm.points[arguments[0]];",
+                idx,
+            )
+            gcj_lat = point["lat"] if point and "lat" in point else None
+            gcj_lng = point["lng"] if point and "lng" in point else None
+            latitude, longitude = gcj2wgs(gcj_lat, gcj_lng)
+        except JavascriptException as exception:
+            LOGGER.warning(f"OPPO Cloud {device_model} location not found: {exception}")
+
         return OppoCloudDevice(
             device_model=device_model,
             location_name=location_name,
+            latitude=latitude,
+            longitude=longitude,
+            battery_level=battery_level,
             last_seen=last_seen,
             is_online=is_online,
         )

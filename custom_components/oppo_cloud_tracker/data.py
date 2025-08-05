@@ -31,5 +31,8 @@ class OppoCloudDevice:
 
     device_model: str
     location_name: str
+    latitude: float | None
+    longitude: float | None
+    battery_level: int
     last_seen: str | None
     is_online: bool

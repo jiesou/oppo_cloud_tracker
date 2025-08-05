@@ -87,22 +87,28 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
         return None
 
     @property
+    def battery_level(self) -> int | None:
+        """Return the battery level of the device."""
+        if self.coordinator.data and self._device_index < len(self.coordinator.data):
+            device = self.coordinator.data[self._device_index]
+            return device.battery_level
+        return None
+
+    @property
     def latitude(self) -> float | None:
-        """Return latitude value of the device."""
-        # We don't have GPS coordinates, only location names
+        """Return WGS latitude value of the device."""
+        if self.coordinator.data and self._device_index < len(self.coordinator.data):
+            device = self.coordinator.data[self._device_index]
+            return device.latitude
         return None
 
     @property
     def longitude(self) -> float | None:
-        """Return longitude value of the device."""
-        # We don't have GPS coordinates, only location names
+        """Return WGS longitude value of the device."""
+        if self.coordinator.data and self._device_index < len(self.coordinator.data):
+            device = self.coordinator.data[self._device_index]
+            return device.longitude
         return None
-
-    @property
-    def location_accuracy(self) -> int:
-        """Return the location accuracy of the device."""
-        # Since we only have location names, accuracy is not applicable
-        return 0
 
     @property
     def is_connected(self) -> bool:
