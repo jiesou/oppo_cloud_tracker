@@ -1,46 +1,129 @@
-# Notice
+# OPPO Cloud HeyTap Tracker
 
-The component and platforms in this repository are not meant to be used by a
-user, but as a "blueprint" that custom component developers can build
-upon, to make more awesome stuff.
+Use the [OPPO (HeyTap) Cloud](https://cloud.oppo.com) "Find My Phone" feature to locate OPPO/OnePlus devices and integrate them into Home Assistant as device tracker entities.
 
-HAVE FUN! 😎
+[简体中文文档](README.zh.md)
 
-## Why?
+## Features
 
-This is simple, by having custom_components look (README + structure) the same
-it is easier for developers to help each other and for users to start using them.
+This integration provides the following information for your OPPO/OnePlus devices:
 
-If you are a developer and you want to add things to this "blueprint" that you think more
-developers will have use for, please open a PR to add it :)
+- **Device model**
+- **Location name**
+- **GPS coordinates**
+- **Battery level**
+- **Last update time**
+- **Online status**
+– *Might* support multiple devices, but **not tested**
 
-## What?
+## Requirements
 
-This repository contains multiple files, here is a overview:
+The integration works via Selenium/WebDriver and only supports login by phone number and password.
 
-File | Purpose | Documentation
--- | -- | --
-`.devcontainer.json` | Used for development/testing with Visual Studio Code. | [Documentation](https://code.visualstudio.com/docs/remote/containers)
-`.github/ISSUE_TEMPLATE/*.yml` | Templates for the issue tracker | [Documentation](https://help.github.com/en/github/building-a-strong-community/configuring-issue-templates-for-your-repository)
-`custom_components/integration_blueprint/*` | Integration files, this is where everything happens. | [Documentation](https://developers.home-assistant.io/docs/creating_component_index)
-`CONTRIBUTING.md` | Guidelines on how to contribute. | [Documentation](https://help.github.com/en/github/building-a-strong-community/setting-guidelines-for-repository-contributors)
-`LICENSE` | The license file for the project. | [Documentation](https://help.github.com/en/github/creating-cloning-and-archiving-repositories/licensing-a-repository)
-`README.md` | The file you are reading now, should contain info about the integration, installation and configuration instructions. | [Documentation](https://help.github.com/en/github/writing-on-github/basic-writing-and-formatting-syntax)
-`requirements.txt` | Python packages used for development/lint/testing this integration. | [Documentation](https://pip.pypa.io/en/stable/user_guide/#requirements-files)
+**⚠️ Warning ⚠️: Password storage security is NOT guaranteed**
 
-## How?
+A **separate [Selenium Grid](https://www.selenium.dev/documentation/grid)** instance is required.
 
-1. Create a new repository in GitHub, using this repository as a template by clicking the "Use this template" button in the GitHub UI.
-1. Open your new repository in Visual Studio Code devcontainer (Preferably with the "`Dev Containers: Clone Repository in Named Container Volume...`" option).
-1. Rename all instances of the `integration_blueprint` to `custom_components/<your_integration_domain>` (e.g. `custom_components/awesome_integration`).
-1. Rename all instances of the `Integration Blueprint` to `<Your Integration Name>` (e.g. `Awesome Integration`).
-1. Run the `scripts/develop` to start HA and test out your new integration.
+### Selenium Grid Setup
 
-## Next steps
+It is recommended to deploy Selenium Grid using the official Docker `selenium/standalone-chrome` image.
 
-These are some next steps you may want to look into:
-- Add tests to your integration, [`pytest-homeassistant-custom-component`](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component) can help you get started.
-- Add brand images (logo/icon) to https://github.com/home-assistant/brands.
-- Create your first release.
-- Share your integration on the [Home Assistant Forum](https://community.home-assistant.io/).
-- Submit your integration to [HACS](https://hacs.xyz/docs/publish/start).
+Example `docker-compose.yml`:
+```yaml
+name: selenium
+services:
+  standalone-chrome:
+    cpu_shares: 90
+    command: []
+    container_name: selenium-chrome
+    hostname: selenium-chrome
+    image: selenium/standalone-chrome:latest
+    ports:
+      - target: 4444
+        published: "4444"
+        protocol: tcp
+      - target: 7900
+        published: "7900"
+        protocol: tcp
+    restart: unless-stopped
+    network_mode: bridge
+    privileged: false
+```
+
+## Installation
+
+### Method 1: HACS (Recommended)
+
+[![Open a repository in your Home Assistant HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jiesou&repository=oppo_cloud_tracker&category=integration)
+
+### Method 2: Manual Installation
+
+1. Download this repository
+2. Copy the `custom_components/oppo_cloud_tracker` folder to your Home Assistant's `custom_components` directory
+3. Restart Home Assistant
+
+## Configuration
+
+### Step 1: Add Integration
+
+1. Go to **Settings** → **Devices & Services**
+2. Click **Add Integration**
+3. Search for "OPPO Cloud HeyTap Tracker"
+4. Click to add the integration
+
+### Step 2: Configure Connection
+
+You will need to provide:
+
+- **Selenium Grid URL**: The URL of your Selenium Grid instance
+  - Usually like: `http://[your_docker_hostname]:4444/wd/hub`
+  - Make sure your Home Assistant instance can access the Docker container
+- **OPPO Phone Number**: Your OPPO account phone number (**only +86 supported**)
+- **OPPO Password**: Your OPPO account password (**Warning again: password security is NOT guaranteed**)
+
+After setup, you can also configure the scan interval (default: 300 seconds / 5 minutes).
+
+The integration creates a virtual switch called "Keep Selenium Session" to control session behavior:
+
+- **ON**: Keeps the Selenium session active between updates
+  - Allows higher refresh frequency
+  - Requires devices to continuously report GPS (high battery consumption)
+  - Better for real-time tracking
+
+- **OFF** (default): Closes the Selenium session after each update
+  - Restarts Selenium and re-logs into OPPO Cloud for each update
+  - Lower battery impact on devices
+  - Suitable for periodic location checks
+
+It also provides a `oppo_cloud_tracker.locate` service for manually triggering an immediate device location update in automations.
+
+## FAQ
+
+1. **Cannot connect to Selenium Grid**
+   - Verify the Selenium Grid URL is correct
+   - Ensure Home Assistant can access the Docker container
+   - Check if the Selenium Grid container is running
+
+2. **OPPO login failed**
+   - Verify your phone number and password are correct
+   - Only +86 (China) phone numbers are supported
+   - Try logging in manually to the OPPO Cloud website first
+
+3. **Strange errors or timeouts**
+   - Restart the Selenium Grid Docker container:
+     ```bash
+     docker restart selenium-chrome
+     ```
+   - Check Selenium Grid logs:
+     ```bash
+     docker logs selenium-chrome
+     ```
+
+### Tips & Tricks
+
+- Selenium Grid web interface: http://[your_docker_hostname]:7900 (VNC viewer)
+- Home Assistant logs will show integration activity under `custom_components.oppo_cloud_tracker`
+
+## Disclaimer
+
+This integration is not affiliated with or endorsed by OPPO. It is based on publicly available web interfaces, and all actions on the website follow your configuration. If OPPO changes their website, the integration may stop working. Use at your own risk.
