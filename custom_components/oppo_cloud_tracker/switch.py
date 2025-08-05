@@ -70,19 +70,15 @@ class OppoCloudKeepSessionSwitch(OppoCloudEntity, SwitchEntity):
         self._update_api_client_setting()
         self.async_write_ha_state()
 
+    async def async_toggle(self, **_kwargs: Any) -> None:
+        """Toggle the switch."""
+        if self._is_on:
+            await self.async_turn_off()
+        else:
+            await self.async_turn_on()
+
     @callback
     def _update_api_client_setting(self) -> None:
         """Update the API client with the current switch state."""
         client = self._config_entry.runtime_data.client
         client.set_keep_session(keep_session=self._is_on)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional state attributes."""
-        return {
-            "description": (
-                "When enabled, keeps Selenium WebDriver session alive between "
-                "updates for better performance. When disabled, creates a new "
-                "session for each update to reduce resource usage."
-            ),
-        }
