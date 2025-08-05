@@ -23,3 +23,12 @@ class OppoCloudData:
     client: OppoCloudApiClient
     coordinator: OppoCloudDataUpdateCoordinator
     integration: Integration
+
+@dataclass
+class OppoCloudDevice:
+    """Data for the OPPO Cloud devices."""
+
+    device_model: str
+    location_name: str
+    last_seen: str | None
+    is_online: bool

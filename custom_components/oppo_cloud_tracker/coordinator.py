@@ -9,7 +9,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import (
     OppoCloudApiClientAuthenticationError,
+    OppoCloudApiClientCommunicationError,
     OppoCloudApiClientError,
+    OppoCloudApiClientSeleniumTimeoutError,
 )
 
 if TYPE_CHECKING:
@@ -28,5 +30,9 @@ class OppoCloudDataUpdateCoordinator(DataUpdateCoordinator):
             return await self.config_entry.runtime_data.client.async_get_data()
         except OppoCloudApiClientAuthenticationError as exception:
             raise ConfigEntryAuthFailed(exception) from exception
+        except OppoCloudApiClientCommunicationError as exception:
+            raise UpdateFailed(exception) from exception
+        except OppoCloudApiClientSeleniumTimeoutError as exception:
+            raise UpdateFailed(exception) from exception
         except OppoCloudApiClientError as exception:
             raise UpdateFailed(exception) from exception

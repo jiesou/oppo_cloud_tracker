@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 from homeassistant.components.device_tracker.config_entry import TrackerEntity
 from homeassistant.components.device_tracker.const import SourceType
 
-from .api import OppoCloudApiClientCommunicationError, OppoCloudApiClientError
 from .const import DOMAIN, LOGGER
 from .entity import OppoCloudEntity
 
@@ -72,7 +71,7 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
     def source_type(self) -> SourceType:
         """Return the source type of the device."""
         # Since we only have location names, not GPS coordinates
-        return SourceType.ROUTER
+        return SourceType.GPS
 
     @property
     def location_name(self) -> str | None:
@@ -101,16 +100,6 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
         """Return the location accuracy of the device."""
         # Since we only have location names, accuracy is not applicable
         return 0
-
-    @property
-    def battery_level(self) -> int | None:
-        """Return the battery level of the device."""
-        if self.coordinator.data:
-            devices = self.coordinator.data.get("devices", [])
-            for device in devices:
-                if device["device_id"] == self._device_id:
-                    return device.get("battery_level")
-        return None
 
     @property
     def is_connected(self) -> bool:
@@ -144,20 +133,3 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
                     break
 
         return attributes
-
-    async def async_locate_device(self) -> None:
-        """Trigger device location update."""
-        LOGGER.info("Triggering location update for device: %s", self._device_name)
-        # Use the API client's locate device method to trigger "find my phone"
-        try:
-            client = self.coordinator.config_entry.runtime_data.client
-            await client.async_locate_device(self._device_id)
-            # Request a coordinator refresh to get updated data
-            await self.coordinator.async_request_refresh()
-        except (
-            OppoCloudApiClientError,
-            OppoCloudApiClientCommunicationError,
-        ) as exception:
-            LOGGER.error(
-                "Failed to locate device %s: %s", self._device_name, exception
-            )

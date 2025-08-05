@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from selenium import webdriver
 from selenium.common.exceptions import (
-    NoSuchElementException,
     TimeoutException,
     WebDriverException,
 )
@@ -16,17 +14,45 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.ui import WebDriverWait
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from selenium.webdriver.remote.webelement import WebElement
+
+from custom_components.oppo_cloud_tracker.const import (
+    CONF_OPPO_CLOUD_FIND_URL,
+    CONF_OPPO_CLOUD_LOGIN_URL,
+    LOGGER,
+)
+from custom_components.oppo_cloud_tracker.data import OppoCloudDevice
+
 
 class OppoCloudApiClientError(Exception):
     """Exception to indicate a general API error."""
 
+    def __init__(self, message: str = "unexpected") -> None:
+        """Initialize the OppoCloudApiClientError with a message."""
+        super().__init__(message)
+
+class OppoCloudApiClientSeleniumTimeoutError(OppoCloudApiClientError):
+    """Exception to indicate a timeout error."""
+
+    def __init__(self, context: str = "unexpected") -> None:
+        """Initialize the OppoCloudApiClientSeleniumTimeoutError with a message."""
+        super().__init__(f"when {context}")
 
 class OppoCloudApiClientCommunicationError(OppoCloudApiClientError):
-    """Exception to indicate a communication error."""
+    """Exception to indicate a communication with Selenium error."""
 
+    def __init__(self, context: str = "unexpected") -> None:
+        """Initialize the OppoCloudApiClientCommunicationError with a message."""
+        super().__init__(f"when {context}")
 
 class OppoCloudApiClientAuthenticationError(OppoCloudApiClientError):
     """Exception to indicate an authentication error."""
+
+    def __init__(self, context: str = "unexpected") -> None:
+        """Initialize the OppoCloudApiClientAuthenticationError with a message."""
+        super().__init__(f"when {context}")
 
 
 class OppoCloudApiClient:
@@ -45,130 +71,192 @@ class OppoCloudApiClient:
         self._driver: webdriver.Remote | None = None
         self._driver_initialized = False
 
-    async def async_get_data(self) -> dict[str, Any]:
-        """Get device location data from OPPO Cloud."""
-        try:
-            return await asyncio.get_event_loop().run_in_executor(
-                None, self._get_device_locations
-            )
-        except WebDriverException as exception:
-            msg = f"Selenium WebDriver error - {exception}"
-            raise OppoCloudApiClientCommunicationError(msg) from exception
-        except TimeoutException as exception:
-            msg = f"Timeout error accessing OPPO Cloud - {exception}"
-            raise OppoCloudApiClientCommunicationError(msg) from exception
-        except Exception as exception:
-            msg = f"Unexpected error getting device data - {exception}"
-            raise OppoCloudApiClientError(msg) from exception
+    def _get_or_create_driver(self) -> webdriver.Remote:
+        """Get existing WebDriver instance or create a new one."""
+        if self._driver is not None and self._driver_initialized:
+            return self._driver
 
-    async def async_locate_device(self, device_id: str) -> bool:
-        """Trigger locate device action (find my phone) for a specific device."""
         try:
-            return await asyncio.get_event_loop().run_in_executor(
-                None, self._locate_device, device_id
+            # Set up Chrome options for headless mode
+            chrome_options = ChromeOptions()
+            # chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+
+            # Create remote WebDriver instance
+            self._driver = webdriver.Remote(
+                command_executor=self._selenium_grid_url,
+                options=chrome_options,
             )
-        except WebDriverException as exception:
-            msg = f"Selenium WebDriver error during locate - {exception}"
-            raise OppoCloudApiClientCommunicationError(msg) from exception
-        except Exception as exception:
-            msg = f"Error locating device {device_id} - {exception}"
-            raise OppoCloudApiClientError(msg) from exception
+            self._driver_initialized = True
+        except Exception:
+            self._driver = None
+            self._driver_initialized = False
+            raise
+        return self._driver
 
     async def async_cleanup(self) -> None:
         """Clean up WebDriver resources."""
-        if self._driver:
-            await asyncio.get_event_loop().run_in_executor(None, self._cleanup_driver)
-
-    def _get_or_create_driver(self) -> webdriver.Remote:
-        """Get existing WebDriver instance or create a new one."""
-        if self._driver is None or not self._driver_initialized:
-            try:
-                # Set up Chrome options for headless mode
-                chrome_options = ChromeOptions()
-                chrome_options.add_argument("--headless")
-                chrome_options.add_argument("--no-sandbox")
-                chrome_options.add_argument("--disable-dev-shm-usage")
-                chrome_options.add_argument("--disable-gpu")
-                chrome_options.add_argument("--window-size=1920,1080")
-
-                # Create remote WebDriver instance
-                self._driver = webdriver.Remote(
-                    command_executor=self._selenium_grid_url,
-                    options=chrome_options,
-                )
-                self._driver_initialized = True
-            except Exception:
-                self._driver = None
-                self._driver_initialized = False
-                raise
-
-        return self._driver
+        if not self._driver:
+            return
+        await asyncio.get_event_loop().run_in_executor(None, self._cleanup_driver)
 
     def _cleanup_driver(self) -> None:
         """Clean up the WebDriver instance."""
-        if self._driver:
-            try:
-                self._driver.quit()
-            except WebDriverException:
-                # Ignore WebDriver cleanup errors as they're expected during shutdown
-                pass
-            finally:
-                self._driver = None
-                self._driver_initialized = False
-
-    def _get_device_locations(self) -> dict[str, Any]:
-        """Get device locations using Selenium WebDriver."""
+        if not self._driver:
+            return
         try:
-            # Use existing driver or create new one
-            self._get_or_create_driver()
+            self._driver.quit()
+        except WebDriverException:
+            # Ignore WebDriver cleanup errors as they're expected during shutdown
+            pass
+        finally:
+            self._driver = None
+            self._driver_initialized = False
 
+    async def async_login_oppo_cloud(self) -> None:
+        """Log in to OPPO Cloud using Selenium."""
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, self._login_oppo_cloud)
         except TimeoutException as exception:
-            msg = "Timeout waiting for page elements"
-            raise OppoCloudApiClientCommunicationError(msg) from exception
-        except NoSuchElementException as exception:
-            msg = "Required page elements not found - possible login failure"
+            msg = f"login - {exception}"
+            raise OppoCloudApiClientSeleniumTimeoutError(msg) from exception
+        except Exception as exception:
+            msg = f"login - {exception}"
             raise OppoCloudApiClientAuthenticationError(msg) from exception
-        else:
-            # For now, return fake data until actual implementation
-            return {
-                "devices": [
-                    {
-                        "device_id": "device_001",
-                        "device_name": "OPPO Find X7",
-                        "location_name": "家里",  # Home in Chinese
-                        "battery_level": 85,
-                        "last_seen": "2024-01-15T10:30:00Z",
-                        "device_model": "OPPO Find X7",
-                        "is_online": True,
-                    },
-                    {
-                        "device_id": "device_002",
-                        "device_name": "OPPO Reno12",
-                        "location_name": "公司",  # Company in Chinese
-                        "battery_level": 42,
-                        "last_seen": "2024-01-15T09:45:00Z",
-                        "device_model": "OPPO Reno12",
-                        "is_online": False,
-                    },
-                ]
-            }
 
-    def _locate_device(self, device_id: str) -> bool:
-        """Trigger locate device action using existing WebDriver instance."""
+    def _login_oppo_cloud(self) -> None:
+        """Log in to OPPO Cloud using Selenium."""
+        driver = self._get_or_create_driver()
+
+        driver.get(CONF_OPPO_CLOUD_LOGIN_URL)
+
+        # "Sign in"
+        WebDriverWait(driver, 10).until(
+            expected_conditions.element_to_be_clickable(
+                (By.CSS_SELECTOR, "div.wrapper-login span.btn")
+            )
+        ).click()
+
+        login_iframe = WebDriverWait(driver, 10).until(
+            expected_conditions.presence_of_element_located((By.CSS_SELECTOR, "iframe"))
+        )
+        driver.switch_to.frame(login_iframe)
+
+        # Enter tele and password
+        WebDriverWait(driver, 10).until(
+            expected_conditions.presence_of_element_located(
+                (By.CSS_SELECTOR, "div:nth-child(1) > form input[type='tel']")
+            )
+        ).send_keys(self._username)
+        driver.find_element(
+            By.CSS_SELECTOR, "div:nth-child(1) > form input[type='password']"
+        ).send_keys(self._password)
+        # Wait for "Sign in with password" button
+        WebDriverWait(driver, 10).until(
+            lambda d: not any(
+                "disabled" in cls
+                for cls in (
+                    (d.find_element(
+                        By.CSS_SELECTOR, "div:nth-child(1) > form button"
+                    ).get_attribute("class") or "").split()
+                )
+            )
+        )
+        driver.find_element(
+            By.CSS_SELECTOR, "div:nth-child(1) > form button"
+        ).click()
+        # Wait for login to complete
+        WebDriverWait(driver, 10).until(
+            expected_conditions.url_changes(CONF_OPPO_CLOUD_LOGIN_URL)
+        )
+
+    async def async_get_data(self) -> list[OppoCloudDevice]:
+        """Get device location data from OPPO Cloud."""
         try:
-            # Use existing driver or create new one
-            self._get_or_create_driver()
-
+            return await asyncio.get_event_loop().run_in_executor(
+                None, self._get_devices_data
+            )
+        except OppoCloudApiClientAuthenticationError:
+            # Not logged in, try to log in
+            LOGGER.info("OPPO Cloud not logged in, attempting to log in")
+            await self.async_login_oppo_cloud()
+            return await self.async_get_data()
         except TimeoutException as exception:
-            msg = f"Timeout locating device {device_id}"
-            raise OppoCloudApiClientCommunicationError(msg) from exception
-        except NoSuchElementException as exception:
-            msg = f"Could not find locate button for device {device_id}"
-            raise OppoCloudApiClientCommunicationError(msg) from exception
+            msg = f"get_devices_data - {exception}"
+            raise OppoCloudApiClientSeleniumTimeoutError(msg) from exception
+        except Exception as exception:
+            msg = f"Unexpected get_devices_data - {exception}"
+            raise OppoCloudApiClientError(msg) from exception
+
+    def _get_devices_data(self) -> list[OppoCloudDevice]:
+        """Get device locations using Selenium WebDriver."""
+        driver = self._get_or_create_driver()
+        driver.get(CONF_OPPO_CLOUD_FIND_URL)
+
+        # Wait for the device list to load
+        WebDriverWait(driver, 10).until(
+            lambda d: (
+                d.find_elements(By.CSS_SELECTOR, "#device-list > div.device-list")
+                or d.find_elements(By.CSS_SELECTOR, "div.wrapper-login span.btn")
+            )
+        )
+
+        # 如果页面跳转
+        if not driver.current_url.startswith(CONF_OPPO_CLOUD_FIND_URL):
+            msg = "not logged in or page redirected unexpectedly"
+            raise OppoCloudApiClientAuthenticationError(msg)
+
+        # 继续解析设备列表
+        devices_list_el = driver.find_element(
+            By.CSS_SELECTOR, "#device-list > div.device-list"
+        )
+
+        devices: list[OppoCloudDevice] = []
+        # 查找所有设备条目
+        device_items = devices_list_el.find_elements(
+            By.CSS_SELECTOR, "ul > li"
+        )
+        for item in device_items:
+            item.click()
+            # Load device details
+            WebDriverWait(driver, 10).until(
+                expected_conditions.presence_of_element_located(
+                    (By.CSS_SELECTOR, "div.panel-wrap > div.device-detail")
+                )
+            )
+            devices.append(self._parse_single_device(item))
+        return devices
+
+    def _parse_single_device(self, device_el: WebElement) -> OppoCloudDevice:
+        """Parse a single device element."""
+        # 设备型号/名称
+        name_el = device_el.find_element(By.CSS_SELECTOR, ".device-name .name-title")
+        device_model = name_el.text.strip()
+        # 设备型号/名称
+        name_el = device_el.find_element(By.CSS_SELECTOR, ".device-name .name-title")
+        device_model = name_el.text.strip()
+
+        # 设备在线状态
+        online_el = device_el.find_element(By.CSS_SELECTOR, ".device-name .device-dian")
+        class_attr = online_el.get_attribute("class")
+        is_online = class_attr is not None and "online" in class_attr
+
+        # 位置和最近上线时间
+        poi_el = device_el.find_element(By.CSS_SELECTOR, ".device-poi")
+        # “长安街 · 1 分钟前”
+        poi_text = poi_el.text.strip()
+        if "·" in poi_text:
+            location_name, last_seen = [s.strip() for s in poi_text.split(" · ", 1)]
         else:
-            # For now, just return True to indicate success
-            # This should navigate to OPPO Cloud and trigger the "find my phone" feature
-            return True
+            location_name, last_seen = poi_text, None
+
+        return OppoCloudDevice(
+            device_model=device_model,
+            location_name=location_name,
+            last_seen=last_seen,
+            is_online=is_online
+        )
 
     async def async_test_connection(self) -> bool:
         """Test connection to Selenium Grid and basic functionality."""
@@ -183,28 +271,83 @@ class OppoCloudApiClient:
     def _test_selenium_connection(self) -> bool:
         """Test Selenium Grid connection."""
         try:
-            # Use the shared driver creation method for consistency
             driver = self._get_or_create_driver()
 
             # Simple test - navigate to a basic page
-            driver.get("https://www.google.com")
-            WebDriverWait(driver, 10).until(
+            driver.get(CONF_OPPO_CLOUD_LOGIN_URL)
+            body = WebDriverWait(driver, 10).until(
                 expected_conditions.presence_of_element_located((By.TAG_NAME, "body"))
             )
+            LOGGER.info(f"Successfully connected to Selenium Grid: {body.text[:50]}...")
 
         except Exception:
             # Clean up driver on connection test failure
             self._cleanup_driver()
             raise
-        else:
-            return True
+        return True
 
-    # Keep compatibility with existing template methods
-    async def async_set_title(self, _: str) -> Any:
-        """Compatibility method - not used for OPPO Cloud."""
-        # This method exists for template compatibility but isn't needed
-        # for device tracking functionality
-        return {
-            "status": "not_implemented",
-            "message": "Not applicable for device tracking",
-        }
+
+# ruff: noqa: T201, I001, PLC0415
+# Debug/testing functionality when run as module
+async def _debug_main() -> None:
+    """Debug main function for testing Selenium client."""
+    import os
+    import sys
+    import logging
+
+    # Set up logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    # Get configuration from environment variables or defaults
+    username = os.getenv("OPPO_USERNAME")
+    password = os.getenv("OPPO_PASSWORD")
+    selenium_grid_url = os.getenv("SELENIUM_GRID_URL", "http://localhost:4444/wd/hub")
+
+    if username is None or password is None:
+        print("⚠️  Please set OPPO_USERNAME and OPPO_PASSWORD environment variables")
+        print("Example:")
+        print("export OPPO_USERNAME='your_oppo_account'")
+        print("export OPPO_PASSWORD='your_password'")
+        print("export SELENIUM_GRID_URL='http://localhost:4444/wd/hub'  # Optional")
+        sys.exit(1)
+
+    print("🔧 Testing OPPO Cloud API Client")
+    print(f"   Username: {username}")
+    print(f"   Selenium Grid: {selenium_grid_url}")
+    print()
+
+    client = OppoCloudApiClient(username, password, selenium_grid_url)
+
+    try:
+        # Test 1: Connection test
+        print("1️⃣  Testing Selenium Grid connection...")
+        connection_ok = await client.async_test_connection()
+        print(f"   ✅ Connection successful: {connection_ok}")
+        print()
+
+        if connection_ok:
+            # Test 2: Get device data
+            print("2️⃣  Getting device data...")
+            data = await client.async_get_data()
+            print(f"   📱 Found {len(data)} devices:")
+            for device in data:
+                print(f"      - {device.device_model}")
+                print(f"        Location: {device.location_name}")
+                print(f"        Online: {device.is_online}")
+            print()
+
+        print("✅ All tests completed successfully!")
+
+    finally:
+        print("\n🧹 Cleaning up...")
+        await client.async_cleanup()
+        print("   Cleanup completed")
+
+
+if __name__ == "__main__":
+    print("🚀 OPPO Cloud Tracker - Selenium API Debug Tool")
+    print("=" * 50)
+    asyncio.run(_debug_main())
