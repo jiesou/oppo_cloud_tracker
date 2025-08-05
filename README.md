@@ -4,6 +4,9 @@ Use the [OPPO (HeyTap) Cloud](https://cloud.oppo.com) "Find My Phone" feature to
 
 [简体中文文档](README.zh.md)
 
+<img width="560" alt="ha device" src="https://github.com/user-attachments/assets/5b8dda5c-f751-4f9a-b184-27affb0f72d5" />
+<img width="560" alt="device tracker" src="https://github.com/user-attachments/assets/db90e6ea-19fd-416e-9c64-4d0439ff036d" />
+
 ## Features
 
 This integration provides the following information for your OPPO/OnePlus devices:

@@ -2,6 +2,9 @@
 
 使用 [OPPO (欢太) 云服务](https://cloud.oppo.com)的查找手机功能来定位 OPPO/OnePlus 设备，并将其集成到 Home Assistant 作为设备追踪器实体。
 
+<img width="560" alt="ha device" src="https://github.com/user-attachments/assets/5b8dda5c-f751-4f9a-b184-27affb0f72d5" />
+<img width="560" alt="device tracker" src="https://github.com/user-attachments/assets/db90e6ea-19fd-416e-9c64-4d0439ff036d" />
+
 ## 功能
 
 可以提供这些信息：

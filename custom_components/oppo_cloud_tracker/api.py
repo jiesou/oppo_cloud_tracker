@@ -297,9 +297,10 @@ class OppoCloudApiClient:
         device_model = name_el.text.strip()
 
         # Check is_online
-        online_el = device_el.find_element(By.CSS_SELECTOR, ".device-name .device-dian")
-        class_attr = online_el.get_attribute("class")
-        is_online = class_attr is not None and "online" in class_attr
+        online_el = device_el.find_elements(
+            By.CSS_SELECTOR, ".device-name .device-dian.online"
+        )
+        is_online = bool(online_el)
 
         # Check location_name and last_seen
         address_el = device_el.find_element(By.CSS_SELECTOR, ".device-address")
@@ -311,10 +312,15 @@ class OppoCloudApiClient:
             location_name, last_seen = address_text, None
 
         # Check battery level
-        battery_el = device_el.find_element(
+        battery_el = device_el.find_elements(
             By.CSS_SELECTOR, "div.info-item.info-state > div.info-battery > div.count"
         )
-        battery_text = battery_el.text.strip()
+        if not battery_el:
+            # If no battery info, set to 0%
+            battery_level = 0
+            if not is_online:
+                LOGGER.warning(f"OPPO Cloud {device_model} has no battery info")
+        battery_text = battery_el[0].text.strip() if battery_el else ""
         battery_level = int(battery_text[:-1]) if battery_text.endswith("%") else 0
         # Check lat/lng by exec js
         gcj_lat = None
