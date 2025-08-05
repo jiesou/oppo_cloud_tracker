@@ -79,7 +79,7 @@ class OppoCloudApiClient:
         try:
             # Set up Chrome options for headless mode
             chrome_options = ChromeOptions()
-            # chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
 
@@ -194,68 +194,99 @@ class OppoCloudApiClient:
         driver = self._get_or_create_driver()
         driver.get(CONF_OPPO_CLOUD_FIND_URL)
 
-        # Wait for the device list to load
+        # Wait for the page to load and check if logged in
         WebDriverWait(driver, 10).until(
             lambda d: (
-                d.find_elements(By.CSS_SELECTOR, "#device-list > div.device-list")
+                d.find_elements(
+                    By.CSS_SELECTOR, "#device-list > div.device-list"
+                )
                 or d.find_elements(By.CSS_SELECTOR, "div.wrapper-login span.btn")
             )
         )
 
-        # 如果页面跳转
+        # If redirected to login page
         if not driver.current_url.startswith(CONF_OPPO_CLOUD_FIND_URL):
             msg = "not logged in or page redirected unexpectedly"
             raise OppoCloudApiClientAuthenticationError(msg)
 
-        # 继续解析设备列表
+        # Wait for the device list to fully load
+        # Step 1: Wait for device_location loading indicator
+        WebDriverWait(driver, 10).until(
+            lambda d: d.find_element(
+                By.CSS_SELECTOR, "div.device_location"
+            ).value_of_css_property("display") == "none"
+        )
+        # Step 2: Wait for all "正在更新" indicators to disappear
+        WebDriverWait(driver, 30).until(
+            lambda d: not d.find_elements(
+                By.XPATH, "//span[text()='正在更新']"
+            )
+        )
+        # Step 3: Wait for device location info to be present
+        WebDriverWait(driver, 10).until(
+            lambda d: all(
+                # Each device should has device-poi (location info) or in error state
+                item.find_elements(
+                    By.CSS_SELECTOR, ".device-poi") or
+                item.find_elements(
+                    By.CSS_SELECTOR, ".device-status-wrap:not(.positioning)")
+                for item in
+                d.find_elements(By.CSS_SELECTOR, "#device-list .device-list ul > li")
+            ) if d.find_elements(By.CSS_SELECTOR, "#device-list .device-list ul > li")
+            else True
+        )
+
         devices_list_el = driver.find_element(
             By.CSS_SELECTOR, "#device-list > div.device-list"
         )
 
         devices: list[OppoCloudDevice] = []
-        # 查找所有设备条目
+        # Find all device items
         device_items = devices_list_el.find_elements(
             By.CSS_SELECTOR, "ul > li"
         )
         for item in device_items:
             item.click()
-            # Load device details
-            WebDriverWait(driver, 10).until(
+            # To check device details
+            device_detail_el = WebDriverWait(driver, 10).until(
                 expected_conditions.presence_of_element_located(
                     (By.CSS_SELECTOR, "div.panel-wrap > div.device-detail")
                 )
             )
-            devices.append(self._parse_single_device(item))
+            devices.append(self._parse_single_device(device_detail_el))
+            # Go back to the device list
+            device_detail_el.find_element(
+                By.CSS_SELECTOR, "div.handle-header-left > i.back",
+            ).click()
         return devices
 
     def _parse_single_device(self, device_el: WebElement) -> OppoCloudDevice:
         """Parse a single device element."""
-        # 设备型号/名称
-        name_el = device_el.find_element(By.CSS_SELECTOR, ".device-name .name-title")
-        device_model = name_el.text.strip()
-        # 设备型号/名称
-        name_el = device_el.find_element(By.CSS_SELECTOR, ".device-name .name-title")
+        # Device model/name
+        name_el = device_el.find_element(
+            By.CSS_SELECTOR, ".device-name span:last-child"
+        )
         device_model = name_el.text.strip()
 
-        # 设备在线状态
+        # Check is_online
         online_el = device_el.find_element(By.CSS_SELECTOR, ".device-name .device-dian")
         class_attr = online_el.get_attribute("class")
         is_online = class_attr is not None and "online" in class_attr
 
-        # 位置和最近上线时间
-        poi_el = device_el.find_element(By.CSS_SELECTOR, ".device-poi")
-        # “长安街 · 1 分钟前”
-        poi_text = poi_el.text.strip()
-        if "·" in poi_text:
-            location_name, last_seen = [s.strip() for s in poi_text.split(" · ", 1)]
+        # Check location_name and last_seen
+        address_el = device_el.find_element(By.CSS_SELECTOR, ".device-address")
+        # "XX地 · 刚刚"
+        address_text = address_el.text.strip()
+        if "·" in address_text:
+            location_name, last_seen = [s.strip() for s in address_text.split(" · ", 1)]
         else:
-            location_name, last_seen = poi_text, None
+            location_name, last_seen = address_text, None
 
         return OppoCloudDevice(
             device_model=device_model,
             location_name=location_name,
             last_seen=last_seen,
-            is_online=is_online
+            is_online=is_online,
         )
 
     async def async_test_connection(self) -> bool:
@@ -336,6 +367,7 @@ async def _debug_main() -> None:
             for device in data:
                 print(f"      - {device.device_model}")
                 print(f"        Location: {device.location_name}")
+                print(f"        Last seen: {device.last_seen}")
                 print(f"        Online: {device.is_online}")
             print()
 
