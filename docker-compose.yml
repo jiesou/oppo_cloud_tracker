@@ -1,0 +1,18 @@
+name: selenium
+services:
+  standalone-chrome:
+    cpu_shares: 90
+    command: []
+    container_name: selenium-chrome
+    hostname: selenium-chrome
+    image: selenium/standalone-chrome:latest
+    ports:
+      - target: 4444
+        published: "4444"
+        protocol: tcp
+      - target: 7900
+        published: "7900"
+        protocol: tcp
+    restart: unless-stopped
+    network_mode: bridge
+    privileged: false
