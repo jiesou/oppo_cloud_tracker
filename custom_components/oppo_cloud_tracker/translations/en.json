@@ -6,13 +6,13 @@
                 "description": "Enter your Selenium Grid URL and OPPO account credentials. For more help, visit: https://github.com/jiesou/oppo_cloud_tracker",
                 "data": {
                     "selenium_grid_url": "Selenium Grid URL",
-                    "username": "OPPO Username (+86 only)",
+                    "username": "OPPO Phone number (+86 only)",
                     "password": "OPPO Password"
                 }
             }
         },
         "error": {
-            "auth": "OPPO username/password is incorrect.",
+            "auth": "OPPO login failed.",
             "connection": "Unable to connect to Selenium Grid.",
             "unknown": "An unknown error occurred during configuration."
         },
@@ -39,7 +39,7 @@
         },
         "switch": {
             "keep_selenium_session": {
-                "name": "Keep Selenium Session"
+                "name": "Keep OPPO Cloud Selenium Session"
             }
         }
     },

@@ -77,12 +77,17 @@ class OppoCloudApiClient:
         self._driver_initialized = False
         self._keep_session = False  # Default to False for resource efficiency
 
-    def set_keep_session(self, *, keep_session: bool) -> None:
+    def set_keep_selenium_session(self, *, keep_session: bool) -> None:
+        """Set whether to keep the WebDriver session (synchronous version)."""
+        self._keep_session = keep_session
+        # Don't cleanup in sync version to avoid blocking operations
+
+    async def async_set_keep_selenium_session(self, *, keep_session: bool) -> None:
         """Set whether to keep the WebDriver session between updates."""
         self._keep_session = keep_session
         # If disabling session keeping and we have an active session, clean it up
         if not keep_session and self._driver is not None and self._driver_initialized:
-            self._cleanup_driver()
+            await self.async_cleanup()
 
     def _get_or_create_driver(self) -> webdriver.Remote:
         """Get existing WebDriver instance or create a new one."""
@@ -97,7 +102,7 @@ class OppoCloudApiClient:
             chrome_options.add_argument("--disable-gpu")
 
             remote_connection = RemoteConnection(self._selenium_grid_url)
-            remote_connection.set_timeout(3)  # seconds
+            remote_connection.set_timeout(5)  # seconds
             self._driver = webdriver.Remote(
                 command_executor=remote_connection,
                 options=chrome_options,

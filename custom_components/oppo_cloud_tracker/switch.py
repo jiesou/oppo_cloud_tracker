@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.core import callback
 
 from .const import DOMAIN, SWITCH_KEEP_SESSION
 from .entity import OppoCloudEntity
@@ -14,6 +13,8 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+    from custom_components.oppo_cloud_tracker.api import OppoCloudApiClient
 
     from .coordinator import OppoCloudDataUpdateCoordinator
 
@@ -42,16 +43,18 @@ class OppoCloudKeepSessionSwitch(OppoCloudEntity, SwitchEntity):
         """Initialize the switch."""
         super().__init__(coordinator)
         self._config_entry = config_entry
-        self._attr_name = "Keep Selenium Session"
+        self._attr_has_entity_name = True
+        self._attr_translation_key = "keep_selenium_session"
         self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_{SWITCH_KEEP_SESSION}"
-        self._attr_icon = "mdi:web"
+        self._attr_icon = "mdi:crosshairs-gps"
         self._attr_entity_registry_enabled_default = True
 
         # Default to False (disabled) - cleanup session after each update
         self._is_on = False
 
         # Set the initial state in the API client
-        self._update_api_client_setting()
+        self.client: OppoCloudApiClient = self._config_entry.runtime_data.client
+        self.client.set_keep_selenium_session(keep_session=self._is_on)
 
     @property
     def is_on(self) -> bool:
@@ -61,13 +64,13 @@ class OppoCloudKeepSessionSwitch(OppoCloudEntity, SwitchEntity):
     async def async_turn_on(self, **_kwargs: Any) -> None:
         """Turn the switch on."""
         self._is_on = True
-        self._update_api_client_setting()
+        await self._async_update_api_client_setting()
         self.async_write_ha_state()
 
     async def async_turn_off(self, **_kwargs: Any) -> None:
         """Turn the switch off."""
         self._is_on = False
-        self._update_api_client_setting()
+        await self._async_update_api_client_setting()
         self.async_write_ha_state()
 
     async def async_toggle(self, **_kwargs: Any) -> None:
@@ -77,8 +80,6 @@ class OppoCloudKeepSessionSwitch(OppoCloudEntity, SwitchEntity):
         else:
             await self.async_turn_on()
 
-    @callback
-    def _update_api_client_setting(self) -> None:
+    async def _async_update_api_client_setting(self) -> None:
         """Update the API client with the current switch state."""
-        client = self._config_entry.runtime_data.client
-        client.set_keep_session(keep_session=self._is_on)
+        await self.client.async_set_keep_selenium_session(keep_session=self._is_on)

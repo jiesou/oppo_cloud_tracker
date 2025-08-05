@@ -12,7 +12,7 @@
             }
         },
         "error": {
-            "auth": "OPPO 用户名或密码错误。",
+            "auth": "OPPO 登录失败。",
             "connection": "无法连接到 Selenium Grid。",
             "unknown": "配置过程中发生未知错误。"
         },
@@ -39,7 +39,7 @@
         },
         "switch": {
             "keep_selenium_session": {
-                "name": "保持 Selenium 会话"
+                "name": "保持 OPPO Cloud Selenium 会话"
             }
         }
     },

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from bleak import cli
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME

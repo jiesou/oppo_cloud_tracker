@@ -1,4 +1,3 @@
 locate:
   name: Locate devices
   description: Trigger an immediate update of device locations from OPPO Cloud.
-  fields:
