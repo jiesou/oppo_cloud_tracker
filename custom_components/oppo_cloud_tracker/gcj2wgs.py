@@ -1,4 +1,4 @@
-# ruff: noqa: N816, ANN201, D103, N806, ANN001, N803
+# ruff: noqa: N816, ANN201, D103, N806, ANN001, N803, D100
 # By https://github.com/googollee/eviltransform/blob/master/python/eviltransform/__init__.py#L61-L66
 
 import math

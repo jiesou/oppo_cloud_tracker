@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-
 from selenium import webdriver
 from selenium.common.exceptions import (
     TimeoutException,
@@ -14,7 +13,7 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.remote.remote_connection import RemoteConnection
+from selenium.webdriver.remote.client_config import ClientConfig
 
 from typing import TYPE_CHECKING
 
@@ -100,15 +99,19 @@ class OppoCloudApiClient:
         try:
             # Set up Chrome options for headless mode
             chrome_options = ChromeOptions()
-            # chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
-
-            remote_connection = RemoteConnection(self._selenium_grid_url)
-            remote_connection.set_timeout(5)  # seconds
+            chrome_options.add_argument(
+                "--window-size=1920,1080"
+            )  # Important for headless!!
+            client_config = ClientConfig(
+                remote_server_addr=self._selenium_grid_url, timeout=10
+            )
             self._driver = webdriver.Remote(
-                command_executor=remote_connection,
+                command_executor=self._selenium_grid_url,
                 options=chrome_options,
+                client_config=client_config,
             )
         except Exception:
             self._driver = None
@@ -413,10 +416,7 @@ async def _debug_main() -> None:
             data = await client.async_get_data()
             print(f"   📱 Found {len(data)} devices:")
             for device in data:
-                print(f"      - {device.device_model}")
-                print(f"        Location: {device.location_name}")
-                print(f"        Last seen: {device.last_seen}")
-                print(f"        Online: {device.is_online}")
+                print(f"     - {device}")
             print()
 
         print("✅ All tests completed successfully!")
