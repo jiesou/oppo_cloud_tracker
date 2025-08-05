@@ -121,9 +121,7 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
             device = self.coordinator.data[self._device_index]
 
             # Add device-specific attributes from OppoCloudDevice
-            if device.last_seen:
-                attributes["last_seen"] = device.last_seen
-
+            # Dont add last_seen attribute because is updates frequently
             attributes["device_model"] = device.device_model
             attributes["is_online"] = str(device.is_online)
 

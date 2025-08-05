@@ -26,7 +26,7 @@
                 "title": "配置选项",
                 "description": "为 OPPO Cloud Tracker 配置其他选项",
                 "data": {
-                    "scan_interval": "扫描间隔（秒，30-3600）"
+                    "scan_interval": "扫描间隔（秒，30-3600）小心耗电！"
                 }
             }
         }

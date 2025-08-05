@@ -26,7 +26,7 @@
                 "title": "Configure Options",
                 "description": "Configure additional options for OPPO Cloud Tracker",
                 "data": {
-                    "scan_interval": "Scan interval (seconds, 30-3600)"
+                    "scan_interval": "Scan interval (seconds, 30-3600) Be careful with power consumption!"
                 }
             }
         }

@@ -182,7 +182,7 @@ class OppoCloudApiClient:
         )
         driver.find_element(By.CSS_SELECTOR, "div:nth-child(1) > form button").click()
         # Wait for login to complete
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             expected_conditions.url_changes(CONF_OPPO_CLOUD_LOGIN_URL)
         )
 

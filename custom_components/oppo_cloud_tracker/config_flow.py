@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from bleak import cli
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
@@ -101,7 +102,7 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             selenium_grid_url=selenium_url,
         )
         # Test connection to Selenium Grid
-        await client.async_test_connection()
+        await client.async_login_oppo_cloud()
         await client.async_cleanup()
 
     @staticmethod
