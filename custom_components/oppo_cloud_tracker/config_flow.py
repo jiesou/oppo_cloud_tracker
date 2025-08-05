@@ -102,6 +102,7 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         )
         # Test connection to Selenium Grid
         await client.async_test_connection()
+        await client.async_cleanup()
 
     @staticmethod
     @callback

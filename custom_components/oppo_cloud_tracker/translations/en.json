@@ -3,21 +3,21 @@
         "step": {
             "user": {
                 "title": "Configure OPPO Cloud Tracker",
-                "description": "Enter your Selenium Grid URL and HeyTap account credentials. For more help, visit: https://github.com/jiesou/oppo_cloud_tracker",
+                "description": "Enter your Selenium Grid URL and OPPO account credentials. For more help, visit: https://github.com/jiesou/oppo_cloud_tracker",
                 "data": {
                     "selenium_grid_url": "Selenium Grid URL",
-                    "username": "HeyTap Username (with +86 prefix)",
-                    "password": "HeyTap Password"
+                    "username": "OPPO Username (+86 only)",
+                    "password": "OPPO Password"
                 }
             }
         },
         "error": {
-            "auth": "HeyTap username/password is incorrect.",
-            "connection": "Unable to connect to Selenium Grid or HeyTap service.",
+            "auth": "OPPO username/password is incorrect.",
+            "connection": "Unable to connect to Selenium Grid.",
             "unknown": "An unknown error occurred during configuration."
         },
         "abort": {
-            "already_configured": "This HeyTap account is already configured."
+            "already_configured": "This OPPO account is already configured."
         }
     },
     "options": {
@@ -36,12 +36,6 @@
             "oppo_device": {
                 "name": "OPPO Device Location"
             }
-        }
-    },
-    "services": {
-        "locate_device": {
-            "name": "Locate Device",
-            "description": "Trigger device location update using OPPO Cloud find my phone feature"
         }
     }
 }

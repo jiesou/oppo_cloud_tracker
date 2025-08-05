@@ -13,8 +13,10 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.remote.remote_connection import RemoteConnection
 
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from selenium.webdriver.remote.webelement import WebElement
 
@@ -33,6 +35,7 @@ class OppoCloudApiClientError(Exception):
         """Initialize the OppoCloudApiClientError with a message."""
         super().__init__(message)
 
+
 class OppoCloudApiClientSeleniumTimeoutError(OppoCloudApiClientError):
     """Exception to indicate a timeout error."""
 
@@ -40,12 +43,14 @@ class OppoCloudApiClientSeleniumTimeoutError(OppoCloudApiClientError):
         """Initialize the OppoCloudApiClientSeleniumTimeoutError with a message."""
         super().__init__(f"when {context}")
 
+
 class OppoCloudApiClientCommunicationError(OppoCloudApiClientError):
     """Exception to indicate a communication with Selenium error."""
 
     def __init__(self, context: str = "unexpected") -> None:
         """Initialize the OppoCloudApiClientCommunicationError with a message."""
         super().__init__(f"when {context}")
+
 
 class OppoCloudApiClientAuthenticationError(OppoCloudApiClientError):
     """Exception to indicate an authentication error."""
@@ -83,9 +88,10 @@ class OppoCloudApiClient:
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
 
-            # Create remote WebDriver instance
+            remote_connection = RemoteConnection(self._selenium_grid_url)
+            remote_connection.set_timeout(3)  # seconds
             self._driver = webdriver.Remote(
-                command_executor=self._selenium_grid_url,
+                command_executor=remote_connection,
                 options=chrome_options,
             )
             self._driver_initialized = True
@@ -157,15 +163,16 @@ class OppoCloudApiClient:
             lambda d: not any(
                 "disabled" in cls
                 for cls in (
-                    (d.find_element(
-                        By.CSS_SELECTOR, "div:nth-child(1) > form button"
-                    ).get_attribute("class") or "").split()
+                    (
+                        d.find_element(
+                            By.CSS_SELECTOR, "div:nth-child(1) > form button"
+                        ).get_attribute("class")
+                        or ""
+                    ).split()
                 )
             )
         )
-        driver.find_element(
-            By.CSS_SELECTOR, "div:nth-child(1) > form button"
-        ).click()
+        driver.find_element(By.CSS_SELECTOR, "div:nth-child(1) > form button").click()
         # Wait for login to complete
         WebDriverWait(driver, 10).until(
             expected_conditions.url_changes(CONF_OPPO_CLOUD_LOGIN_URL)
@@ -197,9 +204,7 @@ class OppoCloudApiClient:
         # Wait for the page to load and check if logged in
         WebDriverWait(driver, 10).until(
             lambda d: (
-                d.find_elements(
-                    By.CSS_SELECTOR, "#device-list > div.device-list"
-                )
+                d.find_elements(By.CSS_SELECTOR, "#device-list > div.device-list")
                 or d.find_elements(By.CSS_SELECTOR, "div.wrapper-login span.btn")
             )
         )
@@ -214,25 +219,26 @@ class OppoCloudApiClient:
         WebDriverWait(driver, 10).until(
             lambda d: d.find_element(
                 By.CSS_SELECTOR, "div.device_location"
-            ).value_of_css_property("display") == "none"
+            ).value_of_css_property("display")
+            == "none"
         )
         # Step 2: Wait for all "正在更新" indicators to disappear
         WebDriverWait(driver, 30).until(
-            lambda d: not d.find_elements(
-                By.XPATH, "//span[text()='正在更新']"
-            )
+            lambda d: not d.find_elements(By.XPATH, "//span[text()='正在更新']")
         )
         # Step 3: Wait for device location info to be present
         WebDriverWait(driver, 10).until(
             lambda d: all(
                 # Each device should has device-poi (location info) or in error state
-                item.find_elements(
-                    By.CSS_SELECTOR, ".device-poi") or
-                item.find_elements(
-                    By.CSS_SELECTOR, ".device-status-wrap:not(.positioning)")
-                for item in
-                d.find_elements(By.CSS_SELECTOR, "#device-list .device-list ul > li")
-            ) if d.find_elements(By.CSS_SELECTOR, "#device-list .device-list ul > li")
+                item.find_elements(By.CSS_SELECTOR, ".device-poi")
+                or item.find_elements(
+                    By.CSS_SELECTOR, ".device-status-wrap:not(.positioning)"
+                )
+                for item in d.find_elements(
+                    By.CSS_SELECTOR, "#device-list .device-list ul > li"
+                )
+            )
+            if d.find_elements(By.CSS_SELECTOR, "#device-list .device-list ul > li")
             else True
         )
 
@@ -242,9 +248,7 @@ class OppoCloudApiClient:
 
         devices: list[OppoCloudDevice] = []
         # Find all device items
-        device_items = devices_list_el.find_elements(
-            By.CSS_SELECTOR, "ul > li"
-        )
+        device_items = devices_list_el.find_elements(By.CSS_SELECTOR, "ul > li")
         for item in device_items:
             item.click()
             # To check device details
@@ -256,7 +260,8 @@ class OppoCloudApiClient:
             devices.append(self._parse_single_device(device_detail_el))
             # Go back to the device list
             device_detail_el.find_element(
-                By.CSS_SELECTOR, "div.handle-header-left > i.back",
+                By.CSS_SELECTOR,
+                "div.handle-header-left > i.back",
             ).click()
         return devices
 

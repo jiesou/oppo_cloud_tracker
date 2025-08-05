@@ -1,0 +1,41 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "配置 OPPO Cloud Tracker",
+                "description": "请输入你的 Selenium Grid 地址和 OPPO 账号信息。更多帮助请访问：https://github.com/jiesou/oppo_cloud_tracker",
+                "data": {
+                    "selenium_grid_url": "Selenium Grid 地址",
+                    "username": "OPPO 手机号（仅支持 +86）",
+                    "password": "OPPO 密码"
+                }
+            }
+        },
+        "error": {
+            "auth": "OPPO 用户名或密码错误。",
+            "connection": "无法连接到 Selenium Grid。",
+            "unknown": "配置过程中发生未知错误。"
+        },
+        "abort": {
+            "already_configured": "该 OPPO 账号已配置。"
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "配置选项",
+                "description": "为 OPPO Cloud Tracker 配置其他选项",
+                "data": {
+                    "scan_interval": "扫描间隔（秒，30-3600）"
+                }
+            }
+        }
+    },
+    "entity": {
+        "device_tracker": {
+            "oppo_device": {
+                "name": "OPPO 设备位置"
+            }
+        }
+    }
+}

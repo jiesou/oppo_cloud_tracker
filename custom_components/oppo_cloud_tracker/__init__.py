@@ -47,6 +47,7 @@ async def async_setup_entry(
         logger=LOGGER,
         name=DOMAIN,
         update_interval=timedelta(seconds=scan_interval),
+        always_update=False,  # OppoCloudDevice can directly handle __eq__
     )
     entry.runtime_data = OppoCloudData(
         client=OppoCloudApiClient(

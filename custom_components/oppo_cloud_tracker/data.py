@@ -24,6 +24,7 @@ class OppoCloudData:
     coordinator: OppoCloudDataUpdateCoordinator
     integration: Integration
 
+
 @dataclass
 class OppoCloudDevice:
     """Data for the OPPO Cloud devices."""
