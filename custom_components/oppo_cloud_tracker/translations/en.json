@@ -36,6 +36,17 @@
             "oppo_device": {
                 "name": "OPPO Device Location"
             }
+        },
+        "switch": {
+            "keep_selenium_session": {
+                "name": "Keep Selenium Session"
+            }
+        }
+    },
+    "services": {
+        "locate": {
+            "name": "Locate Devices",
+            "description": "Trigger an immediate update of device locations from OPPO Cloud."
         }
     }
 }

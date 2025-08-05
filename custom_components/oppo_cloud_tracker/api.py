@@ -75,6 +75,14 @@ class OppoCloudApiClient:
         self._selenium_grid_url = selenium_grid_url
         self._driver: webdriver.Remote | None = None
         self._driver_initialized = False
+        self._keep_session = False  # Default to False for resource efficiency
+
+    def set_keep_session(self, *, keep_session: bool) -> None:
+        """Set whether to keep the WebDriver session between updates."""
+        self._keep_session = keep_session
+        # If disabling session keeping and we have an active session, clean it up
+        if not keep_session and self._driver is not None and self._driver_initialized:
+            self._cleanup_driver()
 
     def _get_or_create_driver(self) -> webdriver.Remote:
         """Get existing WebDriver instance or create a new one."""
@@ -181,7 +189,7 @@ class OppoCloudApiClient:
     async def async_get_data(self) -> list[OppoCloudDevice]:
         """Get device location data from OPPO Cloud."""
         try:
-            return await asyncio.get_event_loop().run_in_executor(
+            result = await asyncio.get_event_loop().run_in_executor(
                 None, self._get_devices_data
             )
         except OppoCloudApiClientAuthenticationError:
@@ -195,6 +203,11 @@ class OppoCloudApiClient:
         except Exception as exception:
             msg = f"Unexpected get_devices_data - {exception}"
             raise OppoCloudApiClientError(msg) from exception
+        else:
+            # If not keeping session, cleanup after successful data fetch
+            if not self._keep_session:
+                await self.async_cleanup()
+            return result
 
     def _get_devices_data(self) -> list[OppoCloudDevice]:
         """Get device locations using Selenium WebDriver."""
