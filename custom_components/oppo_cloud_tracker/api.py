@@ -11,6 +11,7 @@ from selenium.common.exceptions import (
 )
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.remote.client_config import ClientConfig
@@ -99,6 +100,7 @@ class OppoCloudApiClient:
         try:
             # Set up Chrome options for headless mode
             chrome_options = ChromeOptions()
+            chrome_options.add_argument("--user-data-dir=/tmp/oppo_cloud_profile")
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
@@ -106,7 +108,7 @@ class OppoCloudApiClient:
                 "--window-size=1920,1080"
             )  # Important for headless!!
             client_config = ClientConfig(
-                remote_server_addr=self._selenium_grid_url, timeout=10
+                remote_server_addr=self._selenium_grid_url, timeout=30
             )
             self._driver = webdriver.Remote(
                 command_executor=self._selenium_grid_url,
@@ -144,8 +146,8 @@ class OppoCloudApiClient:
             msg = f"login - {exception}"
             raise OppoCloudApiClientSeleniumTimeoutError(msg) from exception
         except Exception as exception:
-            msg = f"login - {exception}"
-            raise OppoCloudApiClientAuthenticationError(msg) from exception
+            msg = f"Unexpected login - {exception}"
+            raise OppoCloudApiClientError(msg) from exception
 
     def _login_oppo_cloud(self) -> None:
         """Log in to OPPO Cloud using Selenium."""
@@ -166,14 +168,20 @@ class OppoCloudApiClient:
         driver.switch_to.frame(login_iframe)
 
         # Enter tele and password
-        WebDriverWait(driver, 10).until(
+        username_el = WebDriverWait(driver, 10).until(
             expected_conditions.presence_of_element_located(
                 (By.CSS_SELECTOR, "div:nth-child(1) > form input[type='tel']")
             )
-        ).send_keys(self._username)
-        driver.find_element(
+        )
+        username_el.send_keys(Keys.CONTROL + "a")
+        username_el.send_keys(Keys.DELETE)
+        username_el.send_keys(self._username)
+        password_el = driver.find_element(
             By.CSS_SELECTOR, "div:nth-child(1) > form input[type='password']"
-        ).send_keys(self._password)
+        )
+        password_el.send_keys(Keys.CONTROL + "a")
+        password_el.send_keys(Keys.DELETE)
+        password_el.send_keys(self._password)
         # Wait for "Sign in with password" button
         WebDriverWait(driver, 10).until(
             lambda d: not any(
@@ -190,9 +198,14 @@ class OppoCloudApiClient:
         )
         driver.find_element(By.CSS_SELECTOR, "div:nth-child(1) > form button").click()
         # Wait for login to complete
-        WebDriverWait(driver, 5).until(
-            expected_conditions.url_changes(CONF_OPPO_CLOUD_LOGIN_URL)
-        )
+        try:
+            WebDriverWait(driver, 5).until(
+                expected_conditions.url_changes(CONF_OPPO_CLOUD_LOGIN_URL)
+            )
+        except TimeoutException as exception:
+            msg = "login"
+            raise OppoCloudApiClientAuthenticationError(msg) from exception
+        LOGGER.info("OPPO Cloud login successful")
 
     async def async_get_data(self) -> list[OppoCloudDevice]:
         """Get device location data from OPPO Cloud."""
@@ -284,6 +297,7 @@ class OppoCloudApiClient:
                 By.CSS_SELECTOR,
                 "div.handle-header-left > i.back",
             ).click()
+        LOGGER.info(f"Found {len(devices)} devices in OPPO Cloud")
         return devices
 
     def _parse_single_device(
