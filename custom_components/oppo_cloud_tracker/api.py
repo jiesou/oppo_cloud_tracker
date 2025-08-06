@@ -211,11 +211,11 @@ class OppoCloudApiClient:
         except Exception as exception:
             msg = f"Unexpected get_devices_data - {exception}"
             raise OppoCloudApiClientError(msg) from exception
-        else:
+        finally:
             # If not keeping session, cleanup after successful data fetch
             if not self._keep_session:
                 await self.async_cleanup()
-            return result
+        return result
 
     def _get_devices_data(self) -> list[OppoCloudDevice]:
         """Get device locations using Selenium WebDriver."""
@@ -250,7 +250,7 @@ class OppoCloudApiClient:
         # Step 3: Wait for device location info to be present
         WebDriverWait(driver, 10).until(
             lambda d: all(
-                # Each device should has device-poi (location info) or in error state
+                # Each device should has device-poi or in error state
                 item.find_elements(By.CSS_SELECTOR, ".device-poi")
                 or item.find_elements(
                     By.CSS_SELECTOR, ".device-status-wrap:not(.positioning)"
@@ -318,12 +318,12 @@ class OppoCloudApiClient:
         if not battery_el:
             # If no battery info, set to 0%
             battery_level = 0
-            if not is_online:
+            if is_online:
                 LOGGER.warning(f"OPPO Cloud {device_model} has no battery info")
         battery_text = battery_el[0].text.strip() if battery_el else ""
         battery_level = int(battery_text[:-1]) if battery_text.endswith("%") else 0
         # Check lat/lng by exec js
-        gcj_lat = None
+        latitude = None
         longitude = None
         try:
             point = driver.execute_script(
