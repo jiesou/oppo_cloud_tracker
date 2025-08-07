@@ -90,6 +90,122 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             errors=_errors,
         )
 
+    async def async_step_reauth(
+        self, _: dict[str, Any]
+    ) -> config_entries.ConfigFlowResult:
+        """Handle reauthentication request."""
+        entry_id = self.context.get("entry_id")
+        if entry_id:
+            self.reauth_entry = self.hass.config_entries.async_get_entry(entry_id)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Confirm reauthentication."""
+        errors = {}
+
+        if user_input is not None:
+            try:
+                # Test new credentials
+                selenium_url = user_input.get(
+                    CONF_SELENIUM_GRID_URL,
+                    (
+                        self.reauth_entry.data.get(
+                            CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL
+                        )
+                        if self.reauth_entry
+                        else DEFAULT_SELENIUM_GRID_URL
+                    ),
+                )
+                await self._test_credentials(
+                    username=user_input[CONF_USERNAME],
+                    password=user_input[CONF_PASSWORD],
+                    selenium_url=selenium_url,
+                )
+            except OppoCloudApiClientAuthenticationError as exception:
+                LOGGER.warning(exception)
+                errors["base"] = "auth"
+            except OppoCloudApiClientCommunicationError as exception:
+                LOGGER.error(exception)
+                errors["base"] = "connection"
+            except OppoCloudApiClientError as exception:
+                LOGGER.exception(exception)
+                errors["base"] = "unknown"
+            else:
+                # Check if the username matches the existing entry
+                if self.reauth_entry:
+                    existing_username = self.reauth_entry.data.get(CONF_USERNAME)
+                    if existing_username and slugify(
+                        user_input[CONF_USERNAME]
+                    ) != slugify(existing_username):
+                        errors["base"] = "wrong_account"
+                    else:
+                        # Update the config entry with new credentials
+                        selenium_url_update = user_input.get(
+                            CONF_SELENIUM_GRID_URL,
+                            self.reauth_entry.data.get(
+                                CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL
+                            ),
+                        )
+                        return self.async_update_reload_and_abort(
+                            self.reauth_entry,
+                            data_updates={
+                                CONF_USERNAME: user_input[CONF_USERNAME],
+                                CONF_PASSWORD: user_input[CONF_PASSWORD],
+                                CONF_SELENIUM_GRID_URL: selenium_url_update,
+                            },
+                        )
+
+        # Pre-fill username from existing entry
+        suggested_values = {}
+        if self.reauth_entry:
+            suggested_values[CONF_USERNAME] = self.reauth_entry.data.get(
+                CONF_USERNAME, ""
+            )
+            suggested_values[CONF_SELENIUM_GRID_URL] = self.reauth_entry.data.get(
+                CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL
+            )
+
+        username_placeholder = ""
+        if self.reauth_entry:
+            username_placeholder = self.reauth_entry.data.get(CONF_USERNAME, "")
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_SELENIUM_GRID_URL,
+                        default=(user_input or suggested_values).get(
+                            CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL
+                        ),
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.URL,
+                        ),
+                    ),
+                    vol.Required(
+                        CONF_USERNAME,
+                        default=(user_input or suggested_values).get(CONF_USERNAME, ""),
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.TEXT,
+                        ),
+                    ),
+                    vol.Required(CONF_PASSWORD): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.PASSWORD,
+                        ),
+                    ),
+                },
+            ),
+            errors=errors,
+            description_placeholders={
+                "username": username_placeholder,
+            },
+        )
+
     async def _test_credentials(
         self, username: str, password: str, selenium_url: str
     ) -> None:

@@ -49,6 +49,9 @@ async def async_setup_entry(
         hass=hass,
         logger=LOGGER,
         name=DOMAIN,
+        config_entry=entry,
+        # Should pass the config entry explicitly
+        # See: https://github.com/home-assistant/core/blob/35025c4b598dea294f0db254e8c872f082447f42/homeassistant/helpers/update_coordinator.py#L90-L97
         update_interval=timedelta(seconds=scan_interval),
         always_update=False,  # OppoCloudDevice can directly handle __eq__
     )

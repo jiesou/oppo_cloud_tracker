@@ -9,15 +9,26 @@
                     "username": "OPPO 手机号（仅支持 +86）",
                     "password": "OPPO 密码"
                 }
+            },
+            "reauth_confirm": {
+                "title": "重新认证 OPPO Cloud Tracker",
+                "description": "您的 OPPO 凭据已过期或无效。请为账号 {username} 输入更新的凭据",
+                "data": {
+                    "selenium_grid_url": "Selenium Grid 地址",
+                    "username": "OPPO 手机号（仅支持 +86）",
+                    "password": "OPPO 密码"
+                }
             }
         },
         "error": {
             "auth": "OPPO 登录失败。",
             "connection": "无法连接到 Selenium Grid。",
-            "unknown": "配置过程中发生未知错误。"
+            "unknown": "配置过程中发生未知错误。",
+            "wrong_account": "用户名与现有账号不匹配。请使用相同账号或删除后重新添加集成。"
         },
         "abort": {
-            "already_configured": "该 OPPO 账号已配置。"
+            "already_configured": "该 OPPO 账号已配置。",
+            "reauth_successful": "重新认证成功。"
         }
     },
     "options": {

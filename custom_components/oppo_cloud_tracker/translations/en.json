@@ -9,15 +9,26 @@
                     "username": "OPPO Phone number (+86 only)",
                     "password": "OPPO Password"
                 }
+            },
+            "reauth_confirm": {
+                "title": "Re-authenticate OPPO Cloud Tracker",
+                "description": "Your OPPO credentials have expired or are invalid. Please enter your updated credentials for account: {username}",
+                "data": {
+                    "selenium_grid_url": "Selenium Grid URL",
+                    "username": "OPPO Phone number (+86 only)",
+                    "password": "OPPO Password"
+                }
             }
         },
         "error": {
             "auth": "OPPO login failed.",
             "connection": "Unable to connect to Selenium Grid.",
-            "unknown": "An unknown error occurred during configuration."
+            "unknown": "An unknown error occurred during configuration.",
+            "wrong_account": "The username does not match the existing account. Please use the same account or remove and re-add the integration."
         },
         "abort": {
-            "already_configured": "This OPPO account is already configured."
+            "already_configured": "This OPPO account is already configured.",
+            "reauth_successful": "Re-authentication was successful."
         }
     },
     "options": {
