@@ -17,7 +17,7 @@ This integration provides the following information for your OPPO/OnePlus device
 - **Battery level**
 - **Last update time**
 - **Online status**
-– *Might* support multiple devices, but **not tested**
+- *Might* support multiple devices, but **not tested**
 
 ## Requirements
 
@@ -113,6 +113,7 @@ It also provides a `oppo_cloud_tracker.locate` service for manually triggering a
    - Try logging in manually to the OPPO Cloud website first
 
 3. **Strange errors or timeouts**
+   - Since Selenium operation, initialization and fetching operations usually take more than 10 seconds, which is normal. But if it takes more than 30 seconds, it is best to check and restart Selenium Gird.
    - Restart the Selenium Grid Docker container:
      ```bash
      docker restart selenium-chrome

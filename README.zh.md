@@ -110,6 +110,7 @@ services:
    - 先尝试手动登录 OPPO 云服务网站
 
 3. **奇怪的错误或超时**
+   - 由于通过 Selenium 操作，集成初始化、fetching 的动作一般要花费十几秒钟，比一般集成更费时间是正常的。但如果花费的时间超过30秒，那最好检查、重启一下 Selenium Gird
    - 重启 Selenium Grid Docker 容器：
      ```bash
      docker restart selenium-chrome
@@ -119,7 +120,7 @@ services:
      docker logs selenium-chrome
      ```
 
-### Tips&Tricks
+### Tips & Tricks
 
 - Selenium Grid 网页界面：http://[your_docker_hostname]:7900（VNC 查看器）
 - Home Assistant 日志将在 `custom_components.oppo_cloud_tracker` 下显示集成活动
