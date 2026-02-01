@@ -3,7 +3,7 @@
         "step": {
             "user": {
                 "title": "配置 OPPO Cloud Tracker",
-                "description": "请输入你的 Selenium Grid 地址和 OPPO 账号信息。更多帮助请访问：https://github.com/jiesou/oppo_cloud_tracker",
+                "description": "请输入你的 Selenium Grid 地址和 OPPO 账号信息。",
                 "data": {
                     "selenium_grid_url": "Selenium Grid 地址",
                     "username": "OPPO 手机号（仅支持 +86）",
@@ -35,7 +35,7 @@
         "step": {
             "init": {
                 "title": "配置选项",
-                "description": "为 OPPO Cloud Tracker 配置其他选项",
+                "description": "为 OPPO Cloud Tracker 配置其他选项。",
                 "data": {
                     "scan_interval": "扫描间隔（秒，30-3600）小心耗电！"
                 }

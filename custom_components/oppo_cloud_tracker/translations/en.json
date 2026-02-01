@@ -3,7 +3,7 @@
         "step": {
             "user": {
                 "title": "Configure OPPO Cloud Tracker",
-                "description": "Enter your Selenium Grid URL and OPPO account credentials. For more help, visit: https://github.com/jiesou/oppo_cloud_tracker",
+                "description": "Enter your Selenium Grid URL and OPPO account credentials.",
                 "data": {
                     "selenium_grid_url": "Selenium Grid URL",
                     "username": "OPPO Phone number (+86 only)",
