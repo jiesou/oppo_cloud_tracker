@@ -136,9 +136,11 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 # Check if the username matches the existing entry
                 if self.reauth_entry:
                     existing_username = self.reauth_entry.data.get(CONF_USERNAME)
-                    if existing_username and slugify(
-                        user_input[CONF_USERNAME]
-                    ) != slugify(existing_username):
+                    if (
+                        existing_username
+                        and slugify(user_input[CONF_USERNAME])
+                        != slugify(existing_username)
+                    ):
                         errors["base"] = "wrong_account"
                     else:
                         # Update the config entry with new credentials
@@ -187,7 +189,9 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Required(
                         CONF_USERNAME,
-                        default=(user_input or suggested_values).get(CONF_USERNAME, ""),
+                        default=(user_input or suggested_values).get(
+                            CONF_USERNAME, ""
+                        ),
                     ): selector.TextSelector(
                         selector.TextSelectorConfig(
                             type=selector.TextSelectorType.TEXT,
