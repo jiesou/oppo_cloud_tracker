@@ -1,5 +1,4 @@
-"""
-Custom integration to integrate oppo_cloud_tracker with Home Assistant.
+"""Custom integration to integrate oppo_cloud_tracker with Home Assistant.
 
 For more details about this integration, please refer to
 https://github.com/jiesou/oppo_cloud_tracker

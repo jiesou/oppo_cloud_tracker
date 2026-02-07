@@ -7,15 +7,8 @@ from playwright.async_api import (
     async_playwright,
     Browser,
     BrowserContext,
-    Page,
     TimeoutError as PlaywrightTimeoutError,
-    Error as PlaywrightError,
 )
-
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from playwright.async_api import Locator
 
 from custom_components.oppo_cloud_tracker.const import (
     CONF_OPPO_CLOUD_FIND_URL,
@@ -78,11 +71,7 @@ class OppoCloudApiClient:
         self._keep_session = False
 
     def set_keep_selenium_session(self, *, keep_session: bool) -> None:
-        """Set whether to keep the browser session (synchronous version).
-        
-        Note: This is kept for backward compatibility. The actual session
-        management is async-only with Playwright.
-        """
+        """Set whether to keep the browser session (synchronous version)."""
         self._keep_session = keep_session
 
     async def async_set_keep_selenium_session(self, *, keep_session: bool) -> None:
@@ -100,35 +89,22 @@ class OppoCloudApiClient:
         if self._playwright is None:
             self._playwright = await async_playwright().start()
 
-        # For Selenium Grid compatibility, we need to launch a browser
-        # that connects to the remote endpoint
-        # Note: Playwright doesn't directly support Selenium Grid URLs,
-        # but we can use connect_over_cdp for Chrome DevTools Protocol
         try:
-            # Try to connect using CDP endpoint
-            # Selenium Grid typically exposes CDP at ws://host:port/session/{sessionId}/se/cdp
-            # For simplicity, we'll launch a local browser for now
-            # TODO: Proper Selenium Grid integration would need session management
-            
-            # Since we're using remote browser, try CDP connection
-            # Convert http://host:port/wd/hub to ws://host:port
-            ws_endpoint = self._selenium_grid_url.replace("http://", "ws://").replace("/wd/hub", "")
-            
-            # For Playwright with Selenium Grid, we actually need to use the browser
-            # launched by Selenium Grid. This is complex, so for now we'll use
-            # Playwright's own remote browser capability
+            # Launch local browser
+            # Note: Remote browser support via selenium_grid_url can be added
+            # in the future if needed
             self._browser = await self._playwright.chromium.launch(
                 headless=True,
                 args=[
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
                     "--window-size=1920,1080",
-                ]
+                ],
             )
         except Exception:
             self._browser = None
             raise
-        
+
         return self._browser
 
     async def _get_or_create_context(self) -> BrowserContext:
@@ -137,9 +113,14 @@ class OppoCloudApiClient:
             return self._context
 
         browser = await self._get_or_create_browser()
+        user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
         self._context = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            user_agent=user_agent,
         )
         return self._context
 
@@ -148,11 +129,11 @@ class OppoCloudApiClient:
         if self._context:
             await self._context.close()
             self._context = None
-        
+
         if self._browser:
             await self._browser.close()
             self._browser = None
-        
+
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
@@ -162,87 +143,70 @@ class OppoCloudApiClient:
         try:
             context = await self._get_or_create_context()
             page = await context.new_page()
-            
+
             try:
-                await page.goto(CONF_OPPO_CLOUD_LOGIN_URL, wait_until="domcontentloaded")
-                
-                # Click "Sign in" button and wait for it
-                sign_in_banner = page.get_by_role("banner").get_by_text("Sign in")
-                await sign_in_banner.wait_for(state="visible", timeout=10000)
-                await sign_in_banner.click()
-                
-                # Wait for login iframe to appear
-                await page.wait_for_timeout(2000)  # Give iframe time to load
+                await page.goto(
+                    CONF_OPPO_CLOUD_LOGIN_URL, wait_until="domcontentloaded"
+                )
+
+                # Click "Sign in" button - use natural waiting
+                await page.get_by_role("banner").get_by_text("Sign in").click()
+
+                # Wait for login iframe and interact with it
                 iframe_locator = page.frame_locator("iframe").first
-                
-                # Wait for phone number input to be ready
-                phone_input = iframe_locator.get_by_role("textbox", name="Phone number")
-                await phone_input.wait_for(state="visible", timeout=10000)
-                
-                # Fill in credentials
-                await phone_input.fill(self._username)
-                await iframe_locator.get_by_role("textbox", name="Password").fill(self._password)
-                
-                # Wait for Sign in button to be enabled and click it
-                sign_in_button = iframe_locator.get_by_role("button", name="Sign in")
-                await sign_in_button.wait_for(state="visible", timeout=10000)
-                
-                # Check if button is enabled by looking for disabled attribute
-                # Wait a bit for the button to become enabled
-                for _ in range(10):
-                    is_disabled = await sign_in_button.is_disabled()
-                    if not is_disabled:
-                        break
-                    await page.wait_for_timeout(500)
-                
-                await sign_in_button.click()
-                
-                # Check if "Terms and conditions" dialog appears and click "Agree and continue"
+
+                # Fill in credentials - Playwright auto-waits for elements
+                await iframe_locator.get_by_role("textbox", name="Phone number").fill(
+                    self._username
+                )
+                await iframe_locator.get_by_role("textbox", name="Password").fill(
+                    self._password
+                )
+
+                # Click sign in button - Playwright waits for it to be enabled
+                await iframe_locator.get_by_role("button", name="Sign in").click()
+
+                # Handle "Terms and conditions" dialog if it appears
+                agree_button = iframe_locator.get_by_role(
+                    "button", name="Agree and continue"
+                )
                 try:
-                    agree_button = iframe_locator.get_by_role("button", name="Agree and continue")
-                    await agree_button.wait_for(state="visible", timeout=5000)
-                    await agree_button.click()
+                    await agree_button.click(timeout=5000)
                     LOGGER.info("Agreed to terms and conditions")
                 except PlaywrightTimeoutError:
                     # Dialog might not appear if already agreed before
                     LOGGER.debug("Terms and conditions dialog did not appear")
-                
-                # Wait for login to complete (URL change or successful navigation)
+
+                # Wait for successful login - URL change indicates success
                 try:
-                    # Wait for URL to change from login page
-                    await page.wait_for_function(
-                        f"window.location.href && !window.location.href.startsWith('{CONF_OPPO_CLOUD_LOGIN_URL}')",
-                        timeout=10000
+                    await page.wait_for_url(
+                        lambda url: (not url.startswith(CONF_OPPO_CLOUD_LOGIN_URL)),
+                        timeout=10000,
                     )
                     LOGGER.info("OPPO Cloud login successful")
                 except PlaywrightTimeoutError as exception:
-                    # Check if we're still on login page - might indicate auth failure
+                    # Try to detect error messages in iframe
                     current_url = page.url
                     LOGGER.error(f"Login timeout, current URL: {current_url}")
-                    
-                    # Try to detect error messages in iframe
+
                     try:
-                        error_element = iframe_locator.locator(".error-message, .login-error")
-                        error_count = await error_element.count()
-                        if error_count > 0:
-                            error_text = await error_element.first.text_content()
-                            LOGGER.error(f"Login error message: {error_text}")
-                    except Exception:
+                        error_messages = await iframe_locator.locator(
+                            "text=/error|错误|失败/i"
+                        ).all_text_contents()
+                        if error_messages:
+                            LOGGER.error(f"Login error messages: {error_messages}")
+                    except PlaywrightTimeoutError:
                         pass
-                    
+
                     msg = "login"
                     raise OppoCloudApiClientAuthenticationError(msg) from exception
             finally:
                 await page.close()
-                
+
         except PlaywrightTimeoutError as exception:
             msg = f"login - {exception}"
             raise OppoCloudApiClientPlaywrightTimeoutError(msg) from exception
         except OppoCloudApiClientAuthenticationError:
-            raise
-        except Exception as exception:
-            msg = f"Unexpected login - {exception}"
-            raise OppoCloudApiClientError(msg) from exception
             raise
         except Exception as exception:
             msg = f"Unexpected login - {exception}"
@@ -273,135 +237,173 @@ class OppoCloudApiClient:
         """Get device locations using Playwright."""
         context = await self._get_or_create_context()
         page = await context.new_page()
-        
+
         try:
             await page.goto(CONF_OPPO_CLOUD_FIND_URL, wait_until="domcontentloaded")
-            
-            # Wait for the page to load and check if logged in
-            try:
-                # Wait for either device list or login button
-                await page.locator("#device-list > div.device-list, div.wrapper-login span.btn").first.wait_for(timeout=10000)
-            except PlaywrightTimeoutError:
-                pass
-            
-            # If redirected to login page
+
+            # Check if redirected to login page
             if not page.url.startswith(CONF_OPPO_CLOUD_FIND_URL):
                 msg = "not logged in or page redirected unexpectedly"
                 raise OppoCloudApiClientAuthenticationError(msg)
-            
-            # Wait for the device list to fully load
-            # Step 1: Wait for device_location loading indicator to disappear
-            device_location = page.locator("div.device_location")
-            if await device_location.count() > 0:
-                await device_location.evaluate("el => window.getComputedStyle(el).display === 'none'")
-            
-            # Step 2: Wait for all "正在更新" indicators to disappear
-            await page.locator("//span[text()='正在更新']").wait_for(state="hidden", timeout=30000) if await page.locator("//span[text()='正在更新']").count() > 0 else None
-            
-            # Step 3: Wait for device location info to be present
-            device_items = page.locator("#device-list .device-list ul > li")
-            device_count = await device_items.count()
-            
-            if device_count > 0:
-                for i in range(device_count):
-                    item = device_items.nth(i)
-                    # Each device should have device-poi or be in error state
-                    await item.locator(".device-poi, .device-status-wrap:not(.positioning)").first.wait_for(timeout=10000)
-            
-            devices: list[OppoCloudDevice] = []
-            
-            # Find all device items
-            for idx in range(device_count):
-                item = device_items.nth(idx)
-                await item.click()
-                
-                # Wait for device details
-                device_detail = page.locator("div.panel-wrap > div.device-detail")
-                await device_detail.wait_for(state="visible", timeout=10000)
-                
-                devices.append(await self._parse_single_device(page, idx, device_detail))
-                
-                # Go back to the device list
-                await device_detail.locator("div.handle-header-left > i.back").click()
-                await page.wait_for_timeout(500)  # Brief wait for transition
-            
+
+            # Wait for $findVm to be available with device data
+            # This is more reliable than waiting for UI elements
+            try:
+                await page.wait_for_function(
+                    (
+                        "window.$findVm && window.$findVm.deviceList && "
+                        "window.$findVm.deviceList.length > 0"
+                    ),
+                    timeout=30000,
+                )
+            except PlaywrightTimeoutError as exception:
+                # Check if there are actually no devices
+                has_find_vm = await page.evaluate("window.$findVm !== undefined")
+                if has_find_vm:
+                    device_list = await page.evaluate("window.$findVm.deviceList || []")
+                    if len(device_list) == 0:
+                        LOGGER.info("No devices found in OPPO Cloud")
+                        return []
+                # If $findVm is not available, might not be logged in
+                msg = "not logged in or session expired"
+                raise OppoCloudApiClientAuthenticationError(msg) from exception
+
+            # Extract all device data directly from JavaScript
+            device_data = await page.evaluate(
+                """
+                () => {
+                    if (!window.$findVm || !window.$findVm.deviceList) return null;
+
+                    return {
+                        deviceList: window.$findVm.deviceList,
+                        points: window.$findVm.points
+                    };
+                }
+                """
+            )
+
+            if not device_data or not device_data.get("devices"):
+                LOGGER.warning("No device data available from $findVm")
+                return []
+
+            devices = self._parse_device_data(
+                device_data["deviceList"], device_data.get("points", [])
+            )
+
             LOGGER.info(f"Found {len(devices)} devices in OPPO Cloud")
             return devices
         finally:
             await page.close()
 
-    async def _parse_single_device(
-        self, page: Page, idx: int, device_el: Locator
-    ) -> OppoCloudDevice:
-        """Parse a single device element."""
-        # Device model/name
-        name_el = device_el.locator(".device-name span:last-child")
-        device_model = (await name_el.text_content() or "").strip()
-        
-        # Check is_online
-        online_el = device_el.locator(".device-name .device-dian.online")
-        is_online = await online_el.count() > 0
-        
-        # Check location_name and last_seen
-        address_el = device_el.locator(".device-address")
-        address_text = (await address_el.text_content() or "").strip()
-        
-        if "·" in address_text:
-            location_name, last_seen = [s.strip() for s in address_text.split(" · ", 1)]
-        else:
-            location_name, last_seen = address_text, None
-        
-        # Check battery level
-        battery_el = device_el.locator("div.info-item.info-state > div.info-battery > div.count")
-        battery_count = await battery_el.count()
-        
-        if battery_count == 0:
-            battery_level = 0
-            if is_online:
-                LOGGER.warning(f"OPPO Cloud {device_model} has no battery info")
-        else:
-            battery_text = (await battery_el.first.text_content() or "").strip()
-            battery_level = int(battery_text[:-1]) if battery_text.endswith("%") else 0
-        
-        # Check lat/lng by executing JavaScript
-        latitude = None
-        longitude = None
-        try:
-            point = await page.evaluate("(idx) => window.$findVm.points[idx]", idx)
-            if point and "lat" in point and "lng" in point:
-                gcj_lat = point["lat"]
-                gcj_lng = point["lng"]
-                latitude, longitude = gcj2wgs(gcj_lat, gcj_lng)
-        except Exception as exception:
-            LOGGER.warning(f"OPPO Cloud {device_model} location not found: {exception}")
-        
-        return OppoCloudDevice(
-            device_model=device_model,
-            location_name=location_name,
-            latitude=latitude,
-            longitude=longitude,
-            battery_level=battery_level,
-            last_seen=last_seen,
-            is_online=is_online,
-        )
+    def _parse_device_data(
+        self, devices: list[dict], points: list[dict]
+    ) -> list[OppoCloudDevice]:
+        """
+        Parse device data from window.$findVm.
+
+        Args:
+            devices: List of device objects from $findVm.deviceList
+            points: List of coordinate points from $findVm.points
+
+        Returns:
+            List of OppoCloudDevice objects
+
+        """
+        result: list[OppoCloudDevice] = []
+
+        for idx, device in enumerate(devices):
+            # Extract device name
+            device_model = device.get("deviceName", "Unknown Device")
+
+            # Parse POI (Point of Interest) which contains location and time
+            # Format: "location · time" or just "location"
+            poi = device.get("poi", "") or device.get("simplePoi", "")
+            if "·" in poi:
+                location_name, last_seen = [s.strip() for s in poi.split(" · ", 1)]
+            else:
+                location_name = poi.strip()
+                last_seen = device.get("poiTime")
+
+            # Check online status
+            # onlineStatus: 1 = online, 0 = offline
+            # locationStatus: "online" or other values
+            is_online = (
+                device.get("onlineStatus") == 1
+                or device.get("locationStatus") == "online"
+            )
+
+            # Get coordinates from points array
+            latitude = None
+            longitude = None
+
+            # Try to get coordinates from corresponding point
+            if idx < len(points):
+                point = points[idx]
+                if point and "lat" in point and "lng" in point:
+                    try:
+                        gcj_lat = point["lat"]
+                        gcj_lng = point["lng"]
+                        latitude, longitude = gcj2wgs(gcj_lat, gcj_lng)
+                    except (KeyError, ValueError, TypeError) as exception:
+                        LOGGER.warning(
+                            f"Failed to convert coordinates for "
+                            f"{device_model}: {exception}"
+                        )
+
+            # Also try to parse from coordinate field if needed
+            if latitude is None and "coordinate" in device:
+                try:
+                    coord_str = device["coordinate"]
+                    if coord_str and "," in coord_str:
+                        lat_str, lng_str = coord_str.split(",", 1)
+                        gcj_lat = float(lat_str)
+                        gcj_lng = float(lng_str)
+                        latitude, longitude = gcj2wgs(gcj_lat, gcj_lng)
+                except (ValueError, AttributeError) as exception:
+                    LOGGER.warning(
+                        f"Failed to parse coordinate field for "
+                        f"{device_model}: {exception}"
+                    )
+
+            result.append(
+                OppoCloudDevice(
+                    device_model=device_model,
+                    location_name=location_name,
+                    latitude=latitude,
+                    longitude=longitude,
+                    last_seen=last_seen,
+                    is_online=is_online,
+                )
+            )
+
+        return result
 
     async def async_test_connection(self) -> bool:
-        """Test connection to browser endpoint and basic functionality."""
+        """
+        Test connection to browser endpoint and basic functionality.
+
+        Returns:
+            True if connection is successful
+
+        """
         try:
             context = await self._get_or_create_context()
             page = await context.new_page()
-            
+
             try:
                 # Simple test - navigate to a basic page
-                await page.goto(CONF_OPPO_CLOUD_LOGIN_URL, wait_until="domcontentloaded")
+                await page.goto(
+                    CONF_OPPO_CLOUD_LOGIN_URL, wait_until="domcontentloaded"
+                )
                 body_text = await page.locator("body").text_content()
-                LOGGER.info(f"Successfully connected to browser: {(body_text or '')[:50]}...")
+                LOGGER.info(
+                    f"Successfully connected to browser: {(body_text or '')[:50]}..."
+                )
                 return True
             finally:
                 await page.close()
-                
-        except Exception as exception:
-            # Clean up on connection test failure
+
+        except PlaywrightTimeoutError as exception:
             await self.async_cleanup()
             msg = f"Connection test failed - {exception}"
             raise OppoCloudApiClientCommunicationError(msg) from exception

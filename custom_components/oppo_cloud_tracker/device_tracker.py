@@ -87,14 +87,6 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
         return None
 
     @property
-    def battery_level(self) -> int | None:
-        """Return the battery level of the device."""
-        if self.coordinator.data and self._device_index < len(self.coordinator.data):
-            device = self.coordinator.data[self._device_index]
-            return device.battery_level
-        return None
-
-    @property
     def latitude(self) -> float | None:
         """Return WGS latitude value of the device."""
         if self.coordinator.data and self._device_index < len(self.coordinator.data):
