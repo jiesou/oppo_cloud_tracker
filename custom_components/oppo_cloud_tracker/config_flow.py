@@ -17,7 +17,7 @@ from .api import (
     OppoCloudApiClientCommunicationError,
     OppoCloudApiClientError,
 )
-from .const import CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL, DOMAIN, LOGGER
+from .const import CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL, DOMAIN, LOGGER
 
 
 class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -36,7 +36,7 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 await self._test_credentials(
                     username=user_input[CONF_USERNAME],
                     password=user_input[CONF_PASSWORD],
-                    selenium_url=user_input[CONF_SELENIUM_GRID_URL],
+                    remote_browser_url=user_input[CONF_REMOTE_BROWSER_URL],
                 )
             except OppoCloudApiClientAuthenticationError as exception:
                 LOGGER.warning(exception)
@@ -63,9 +63,9 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_SELENIUM_GRID_URL,
+                        CONF_REMOTE_BROWSER_URL,
                         default=(user_input or {}).get(
-                            CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL
+                            CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL
                         ),
                     ): selector.TextSelector(
                         selector.TextSelectorConfig(
@@ -108,20 +108,20 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 # Test new credentials
-                selenium_url = user_input.get(
-                    CONF_SELENIUM_GRID_URL,
+                remote_browser_url = user_input.get(
+                    CONF_REMOTE_BROWSER_URL,
                     (
                         self.reauth_entry.data.get(
-                            CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL
+                            CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL
                         )
                         if self.reauth_entry
-                        else DEFAULT_SELENIUM_GRID_URL
+                        else DEFAULT_REMOTE_BROWSER_URL
                     ),
                 )
                 await self._test_credentials(
                     username=user_input[CONF_USERNAME],
                     password=user_input[CONF_PASSWORD],
-                    selenium_url=selenium_url,
+                    remote_browser_url=remote_browser_url,
                 )
             except OppoCloudApiClientAuthenticationError as exception:
                 LOGGER.warning(exception)
@@ -136,18 +136,16 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 # Check if the username matches the existing entry
                 if self.reauth_entry:
                     existing_username = self.reauth_entry.data.get(CONF_USERNAME)
-                    if (
-                        existing_username
-                        and slugify(user_input[CONF_USERNAME])
-                        != slugify(existing_username)
-                    ):
+                    if existing_username and slugify(
+                        user_input[CONF_USERNAME]
+                    ) != slugify(existing_username):
                         errors["base"] = "wrong_account"
                     else:
                         # Update the config entry with new credentials
-                        selenium_url_update = user_input.get(
-                            CONF_SELENIUM_GRID_URL,
+                        url_update = user_input.get(
+                            CONF_REMOTE_BROWSER_URL,
                             self.reauth_entry.data.get(
-                                CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL
+                                CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL
                             ),
                         )
                         return self.async_update_reload_and_abort(
@@ -155,7 +153,7 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                             data_updates={
                                 CONF_USERNAME: user_input[CONF_USERNAME],
                                 CONF_PASSWORD: user_input[CONF_PASSWORD],
-                                CONF_SELENIUM_GRID_URL: selenium_url_update,
+                                CONF_REMOTE_BROWSER_URL: url_update,
                             },
                         )
 
@@ -165,8 +163,8 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             suggested_values[CONF_USERNAME] = self.reauth_entry.data.get(
                 CONF_USERNAME, ""
             )
-            suggested_values[CONF_SELENIUM_GRID_URL] = self.reauth_entry.data.get(
-                CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL
+            suggested_values[CONF_REMOTE_BROWSER_URL] = self.reauth_entry.data.get(
+                CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL
             )
 
         username_placeholder = ""
@@ -178,9 +176,9 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_SELENIUM_GRID_URL,
+                        CONF_REMOTE_BROWSER_URL,
                         default=(user_input or suggested_values).get(
-                            CONF_SELENIUM_GRID_URL, DEFAULT_SELENIUM_GRID_URL
+                            CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL
                         ),
                     ): selector.TextSelector(
                         selector.TextSelectorConfig(
@@ -189,9 +187,7 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Required(
                         CONF_USERNAME,
-                        default=(user_input or suggested_values).get(
-                            CONF_USERNAME, ""
-                        ),
+                        default=(user_input or suggested_values).get(CONF_USERNAME, ""),
                     ): selector.TextSelector(
                         selector.TextSelectorConfig(
                             type=selector.TextSelectorType.TEXT,
@@ -211,14 +207,14 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def _test_credentials(
-        self, username: str, password: str, selenium_url: str
+        self, username: str, password: str, remote_browser_url: str
     ) -> None:
         """Validate credentials."""
         # Test Selenium Grid connection and basic functionality
         client = OppoCloudApiClient(
             username=username,
             password=password,
-            selenium_grid_url=selenium_url,
+            remote_browser_url=remote_browser_url,
         )
         # Test connection to Selenium Grid
         await client.async_login_oppo_cloud()

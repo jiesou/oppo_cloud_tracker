@@ -44,7 +44,7 @@ class OppoCloudKeepSessionSwitch(OppoCloudEntity, SwitchEntity):
         super().__init__(coordinator)
         self._config_entry = config_entry
         self._attr_has_entity_name = True
-        self._attr_translation_key = "keep_selenium_session"
+        self._attr_translation_key = "keep_browser_session"
         self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_{SWITCH_KEEP_SESSION}"
         self._attr_icon = "mdi:crosshairs-gps"
         self._attr_entity_registry_enabled_default = True
@@ -54,7 +54,7 @@ class OppoCloudKeepSessionSwitch(OppoCloudEntity, SwitchEntity):
 
         # Set the initial state in the API client
         self.client: OppoCloudApiClient = self._config_entry.runtime_data.client
-        self.client.set_keep_selenium_session(keep_session=self._is_on)
+        self.client.set_keep_browser_session(keep_session=self._is_on)
 
     @property
     def is_on(self) -> bool:
@@ -82,4 +82,4 @@ class OppoCloudKeepSessionSwitch(OppoCloudEntity, SwitchEntity):
 
     async def _async_update_api_client_setting(self) -> None:
         """Update the API client with the current switch state."""
-        await self.client.async_set_keep_selenium_session(keep_session=self._is_on)
+        await self.client.async_set_keep_browser_session(keep_session=self._is_on)

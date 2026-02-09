@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from urllib.parse import urlparse
+
 from playwright.async_api import (
     async_playwright,
     Browser,
@@ -37,7 +40,7 @@ class OppoCloudApiClientPlaywrightTimeoutError(OppoCloudApiClientError):
 
 
 class OppoCloudApiClientCommunicationError(OppoCloudApiClientError):
-    """Exception to indicate a communication with Selenium error."""
+    """Exception to indicate a communication error."""
 
     def __init__(self, context: str = "unexpected") -> None:
         """Initialize the OppoCloudApiClientCommunicationError with a message."""
@@ -59,22 +62,24 @@ class OppoCloudApiClient:
         self,
         username: str,
         password: str,
-        selenium_grid_url: str,  # Keep parameter name for backward compatibility
+        remote_browser_url: str,  # Keep parameter name for backward compatibility
     ) -> None:
         """Initialize OPPO Cloud API Client."""
         self._username = username
         self._password = password
-        self._selenium_grid_url = selenium_grid_url  # Actually used as browser endpoint
+        self._remote_browser_url = (
+            remote_browser_url  # Actually used as browser endpoint
+        )
         self._playwright = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._keep_session = False
 
-    def set_keep_selenium_session(self, *, keep_session: bool) -> None:
+    def set_keep_browser_session(self, *, keep_session: bool) -> None:
         """Set whether to keep the browser session (synchronous version)."""
         self._keep_session = keep_session
 
-    async def async_set_keep_selenium_session(self, *, keep_session: bool) -> None:
+    async def async_set_keep_browser_session(self, *, keep_session: bool) -> None:
         """Set whether to keep the browser session between updates."""
         self._keep_session = keep_session
         # If disabling session keeping and we have an active session, clean it up
@@ -82,28 +87,69 @@ class OppoCloudApiClient:
             await self.async_cleanup()
 
     async def _get_or_create_browser(self) -> Browser:
-        """Get existing Browser instance or create a new one."""
+        """
+        Get existing Browser instance or create a new one.
+
+        Supports multiple remote browser connection modes:
+        - ws:// or wss:// → Playwright native WebSocket connection (highest fidelity)
+        - http:// with /wd/hub → Selenium Grid (via SELENIUM_REMOTE_URL env var)
+        - http:// without /wd/hub → Selenium Grid (auto-detected)
+        """
         if self._browser is not None and self._browser.is_connected():
             return self._browser
 
-        if self._playwright is None:
-            self._playwright = await async_playwright().start()
+        url = self._remote_browser_url.strip()
+        parsed = urlparse(url)
 
         try:
-            # Launch local browser
-            # Note: Remote browser support via selenium_grid_url can be added
-            # in the future if needed
-            self._browser = await self._playwright.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--window-size=1920,1080",
-                ],
-            )
-        except Exception:
-            self._browser = None
+            if parsed.scheme in ("ws", "wss"):
+                # Playwright native WebSocket connection
+                # e.g. ws://localhost:3000 or ws://host:3000?token=xxx
+                LOGGER.info("Connecting to Playwright server at %s", url)
+                if self._playwright is None:
+                    self._playwright = await async_playwright().start()
+                self._browser = await self._playwright.chromium.connect(url)
+
+            elif parsed.scheme in ("http", "https"):
+                # Selenium Grid or CDP endpoint
+                selenium_url = url.rstrip("/")
+                # tolerate trailing slash
+                selenium_url = selenium_url.removesuffix("/wd/hub")
+                # strip /wd/hub suffix for Selenium 4 compatibility
+
+                LOGGER.info(
+                    "Connecting to HTTP Remote Browser at %s (SELENIUM_REMOTE_URL=%s)",
+                    url,
+                    selenium_url,
+                )
+
+                # SELENIUM_REMOTE_URL must be set BEFORE async_playwright().start()
+                # because Playwright Python spawns a Node.js subprocess that inherits
+                # the environment at creation time. Setting os.environ after start()
+                # won't propagate to the already-running Node.js process.
+                os.environ["SELENIUM_REMOTE_URL"] = selenium_url
+
+                # So restart playwright, the subprocess can picks up the env var
+                if self._playwright is not None:
+                    await self._playwright.stop()
+                    self._playwright = None
+                self._playwright = await async_playwright().start()
+
+                self._browser = await self._playwright.chromium.launch(headless=True)
+
+            else:
+                msg = (
+                    f"Unsupported browser URL scheme: {parsed.scheme}. "
+                    "Use ws://, wss://, http://, or https://"
+                )
+                raise OppoCloudApiClientCommunicationError(msg)  # noqa: TRY301
+
+        except OppoCloudApiClientError:
             raise
+        except Exception as exception:
+            self._browser = None
+            msg = f"connecting to remote browser at {url} - {exception}"
+            raise OppoCloudApiClientCommunicationError(msg) from exception
 
         return self._browser
 
@@ -137,6 +183,9 @@ class OppoCloudApiClient:
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
+
+        # Clean up Selenium env var to avoid leaking into other integrations
+        os.environ.pop("SELENIUM_REMOTE_URL", None)
 
     async def async_login_oppo_cloud(self) -> None:
         """Log in to OPPO Cloud using Playwright."""
@@ -282,7 +331,7 @@ class OppoCloudApiClient:
                 """
             )
 
-            if not device_data or not device_data.get("devices"):
+            if not device_data or not device_data.get("deviceList"):
                 LOGGER.warning("No device data available from $findVm")
                 return []
 
@@ -426,22 +475,22 @@ async def _debug_main() -> None:
     # Get configuration from environment variables or defaults
     username = os.getenv("OPPO_USERNAME")
     password = os.getenv("OPPO_PASSWORD")
-    selenium_grid_url = os.getenv("SELENIUM_GRID_URL", "http://localhost:4444/wd/hub")
+    remote_browser_url = os.getenv("REMOTE_BROWSER_URL", "http://localhost:4444/wd/hub")
 
     if username is None or password is None:
         print("⚠️  Please set OPPO_USERNAME and OPPO_PASSWORD environment variables")
         print("Example:")
         print("export OPPO_USERNAME='your_oppo_account'")
         print("export OPPO_PASSWORD='your_password'")
-        print("export SELENIUM_GRID_URL='http://localhost:4444/wd/hub'  # Optional")
+        print("export REMOTE_BROWSER_URL='http://localhost:4444/wd/hub'  # Optional")
         sys.exit(1)
 
     print("🔧 Testing OPPO Cloud API Client")
     print(f"   Username: {username}")
-    print(f"   Selenium Grid: {selenium_grid_url}")
+    print(f"   Remote Browser: {remote_browser_url}")
     print()
 
-    client = OppoCloudApiClient(username, password, selenium_grid_url)
+    client = OppoCloudApiClient(username, password, remote_browser_url)
 
     try:
         # Test 1: Connection test

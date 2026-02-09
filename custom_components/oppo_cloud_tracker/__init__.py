@@ -20,7 +20,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.loader import async_get_loaded_integration
 
 from .api import OppoCloudApiClient
-from .const import CONF_SELENIUM_GRID_URL, DOMAIN, LOGGER, SERVICE_LOCATE
+from .const import CONF_REMOTE_BROWSER_URL, DOMAIN, LOGGER, SERVICE_LOCATE
 from .coordinator import OppoCloudDataUpdateCoordinator
 from .data import OppoCloudData
 
@@ -58,7 +58,7 @@ async def async_setup_entry(
         client=OppoCloudApiClient(
             username=entry.data[CONF_USERNAME],
             password=entry.data[CONF_PASSWORD],
-            selenium_grid_url=entry.data[CONF_SELENIUM_GRID_URL],
+            remote_browser_url=entry.data[CONF_REMOTE_BROWSER_URL],
         ),
         integration=async_get_loaded_integration(hass, entry.domain),
         coordinator=coordinator,

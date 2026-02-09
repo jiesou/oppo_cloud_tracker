@@ -11,13 +11,13 @@ CONF_OPPO_CLOUD_FIND_URL = "https://cloud.oppo.com/pagemodule.html#/find"
 CONF_OPPO_CLOUD_LOGIN_URL = "https://cloud.oppo.com/login.html"
 
 # Default values
-DEFAULT_SELENIUM_GRID_URL = "http://localhost:4444/wd/hub"
+DEFAULT_REMOTE_BROWSER_URL = "http://localhost:4444/wd/hub"
 
 # Configuration keys
-CONF_SELENIUM_GRID_URL = "selenium_grid_url"
+CONF_REMOTE_BROWSER_URL = "selenium_grid_url"  # Legacy key name, keep for compatibility
 
 # Services
 SERVICE_LOCATE = "locate"
 
 # Switch entity IDs
-SWITCH_KEEP_SESSION = "keep_selenium_session"
+SWITCH_KEEP_SESSION = "keep_browser_session"

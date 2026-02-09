@@ -12,19 +12,53 @@
 - **设备型号**
 - **位置名称**
 - **GPS 经纬度**
-- **电池电量**
 - **最后更新时间**
 - **在线状态**
 - *可能、也许、大概* 支持多台设备， **我没有测试条件**
 
 ## 预先要求
 
-集成是通过 Selenium/WebDriver 实现的，只支持手机号和密码登录。同时：
-**⚠️严重警告⚠️：密码存储的安全性不受保证**
+集成是通过 Playwright 实现的，只支持手机号和密码登录。同时：
+**警告：密码存储的安全性不受保证**
 
-它需要一个**独立的 [Selenium Grid](https://www.selenium.dev/zh-cn/documentation/grid) 实例**。
+它需要一个**独立的支持 CDP 的远程浏览器后端，例如 Playwright**，或者也支持 [Selenium Grid](https://www.selenium.dev/zh-cn/documentation/grid) 实例。
 
-### Selenium Grid 设置
+### 远程浏览器后端设置
+
+#### 方案一：Playwright + CDP
+推荐直接用 Docker browserless/chrome 镜像来部署 Playwright + CDP 浏览器后端
+
+参考 `docker-compose.yml`：
+```yaml
+name: selenium
+services:
+  browserless-chrome:
+    container_name: browserless-chrome
+    image: ghcr.io/browserless/chromium:latest
+    environment:
+      - CONCURRENT=10
+      - TOKEN=[TOKEN(changeme)]
+    ports:
+      - target: 3000
+        published: "3000"
+        protocol: tcp
+    restart: unless-stopped
+    network_mode: bridge
+    privileged: false
+```
+
+然后你就能得到你的“浏览器后端地址”，形似
+`ws://[your_docker_hostname]:3000?token=[TOKEN(changeme)]`
+请确保 Home Assistant 实例能够访问到 Docker 容器
+
+如果不需要 Browserless 的复杂功能，普通的 playwright/chrome 镜像当然也应该能正常工作
+
+如果没有合适的机子来跑 Browserless，也可以考虑一些部署在云上的方案，选择也有很多
+
+#### 方案二：Selenium Grid
+
+可以使用经典传统 Selenium Grid API 的方案。但不建议使用。
+这个实现基于 [Playwright 的支持](https://playwright.dev/python/docs/selenium-grid)。因为 Selenium 远不如 Playwright + CDP 来得可靠，性能和效率都差许多。
 
 推荐使用 Docker selenium/standalone-chrome 镜像来部署 Selenium Grid。
 
@@ -33,10 +67,7 @@
 name: selenium
 services:
   standalone-chrome:
-    cpu_shares: 90
-    command: []
     container_name: selenium-chrome
-    hostname: selenium-chrome
     image: selenium/standalone-chrome:latest
     ports:
       - target: 4444
@@ -49,6 +80,10 @@ services:
     network_mode: bridge
     privileged: false
 ```
+
+然后你就能得到你的“浏览器后端地址”，形似
+`http://[your_docker_hostname]:4444/wd/hub`
+请确保 Home Assistant 实例能够访问到 Docker 容器
 
 ## 安装
 
