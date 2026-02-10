@@ -264,6 +264,9 @@ class OppoCloudApiClient:
     async def async_get_data(self) -> list[OppoCloudDevice]:
         """Get device location data from OPPO Cloud."""
         try:
+            if not self._keep_session:
+                # not keeping session, than must login every time
+                await self.async_login_oppo_cloud()
             result = await self._get_devices_data()
         except OppoCloudApiClientAuthenticationError:
             # Not logged in, try to log in
@@ -490,6 +493,7 @@ async def _debug_main() -> None:
     print(f"   Remote Browser: {remote_browser_url}")
     print()
 
+    loop = asyncio.get_running_loop()
     client = OppoCloudApiClient(username, password, remote_browser_url)
 
     try:
@@ -502,7 +506,10 @@ async def _debug_main() -> None:
         if connection_ok:
             # Test 2: Get device data
             print("2️⃣  Getting device data...")
+            start = loop.time()
             data = await client.async_get_data()
+            elapsed = loop.time() - start
+            print(f"   ⏱️ Fetch time: {elapsed:.3f}s")
             print(f"   📱 Found {len(data)} devices:")
             for device in data:
                 print(f"     - {device}")
