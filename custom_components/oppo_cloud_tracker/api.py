@@ -1,18 +1,21 @@
-"""OPPO Cloud Playwright API Client."""
+"""OPPO Cloud Selenium API Client."""
 
 from __future__ import annotations
 
 import asyncio
-import os
-from urllib.parse import urlparse
 import contextlib
 
-from playwright.async_api import (
-    async_playwright,
-    Browser,
-    BrowserContext,
-    TimeoutError as PlaywrightTimeoutError,
+from selenium import webdriver
+from selenium.common.exceptions import (
+    TimeoutException,
+    WebDriverException,
 )
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support import expected_conditions
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.remote.client_config import ClientConfig
 
 from custom_components.oppo_cloud_tracker.const import (
     CONF_OPPO_CLOUD_FIND_URL,
@@ -31,6 +34,7 @@ class OppoCloudApiClientError(Exception):
         """Initialize the OppoCloudApiClientError with a message."""
         super().__init__(message)
 
+
 class OppoCloudApiClientCommunicationError(OppoCloudApiClientError):
     """Exception to indicate a communication error."""
 
@@ -48,23 +52,19 @@ class OppoCloudApiClientAuthenticationError(OppoCloudApiClientError):
 
 
 class OppoCloudApiClient:
-    """OPPO Cloud (HeyTap) API Client using Playwright."""
+    """OPPO Cloud (HeyTap) API Client using Selenium."""
 
     def __init__(
         self,
         username: str,
         password: str,
-        remote_browser_url: str,  # Keep parameter name for backward compatibility
+        remote_browser_url: str,
     ) -> None:
         """Initialize OPPO Cloud API Client."""
         self._username = username
         self._password = password
-        self._remote_browser_url = (
-            remote_browser_url  # Actually used as browser endpoint
-        )
-        self._playwright = None
-        self._browser: Browser | None = None
-        self._context: BrowserContext | None = None
+        self._remote_browser_url = remote_browser_url
+        self._driver: webdriver.Remote | None = None
         self._keep_session = False
 
     def set_keep_browser_session(self, *, keep_session: bool) -> None:
@@ -75,142 +75,134 @@ class OppoCloudApiClient:
         """Set whether to keep the browser session between updates."""
         self._keep_session = keep_session
         # If disabling session keeping and we have an active session, clean it up
-        if not keep_session and self._browser is not None:
+        if not keep_session and self._driver is not None:
             await self.async_cleanup()
 
-    async def _get_or_create_browser(self) -> Browser:
-        """
-        Get existing Browser instance or create a new one.
-
-        Supports multiple remote browser connection modes:
-        - ws:// or wss:// → Playwright native WebSocket connection (highest fidelity)
-        - http:// with /wd/hub → Selenium Grid (via SELENIUM_REMOTE_URL env var)
-        - http:// without /wd/hub → Selenium Grid (auto-detected)
-        """
-        if self._browser is not None and self._browser.is_connected():
-            return self._browser
+    def _get_or_create_driver(self) -> webdriver.Remote:
+        """Get existing WebDriver instance or create a new one."""
+        if self._driver is not None:
+            try:
+                # Check if driver session is still alive
+                self._driver.current_url
+                return self._driver
+            except WebDriverException:
+                self._driver = None
 
         url = self._remote_browser_url.strip()
-        parsed = urlparse(url)
-
         try:
-            if parsed.scheme in ("ws", "wss"):
-                # Playwright native WebSocket connection
-                # e.g. ws://localhost:3000 or ws://host:3000?token=xxx
-                LOGGER.info("Connecting to Playwright server at %s", url)
-                if self._playwright is None:
-                    self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.connect(url)
+            chrome_options = ChromeOptions()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--window-size=1920,1080")
 
-            elif parsed.scheme in ("http", "https"):
-                # Selenium Grid or CDP endpoint
-                selenium_url = url.rstrip("/")
-                # tolerate trailing slash
-                selenium_url = selenium_url.removesuffix("/wd/hub")
-                # strip /wd/hub suffix for Selenium 4 compatibility
+            LOGGER.info("Connecting to Selenium Grid at %s", url)
 
-                LOGGER.info(
-                    "Connecting to HTTP Remote Browser at %s (SELENIUM_REMOTE_URL=%s)",
-                    url,
-                    selenium_url,
-                )
-
-                # SELENIUM_REMOTE_URL must be set BEFORE async_playwright().start()
-                # because Playwright Python spawns a Node.js subprocess that inherits
-                # the environment at creation time. Setting os.environ after start()
-                # won't propagate to the already-running Node.js process.
-                os.environ["SELENIUM_REMOTE_URL"] = selenium_url
-
-                # So restart playwright, the subprocess can picks up the env var
-                if self._playwright is not None:
-                    await self._playwright.stop()
-                    self._playwright = None
-                self._playwright = await async_playwright().start()
-
-                self._browser = await self._playwright.chromium.launch(headless=True)
-
-            else:
-                msg = (
-                    f"Unsupported browser URL scheme: {parsed.scheme}. "
-                    "Use ws://, wss://, http://, or https://"
-                )
-                raise OppoCloudApiClientCommunicationError(msg)  # noqa: TRY301
-
+            client_config = ClientConfig(remote_server_addr=url, timeout=30)
+            self._driver = webdriver.Remote(
+                command_executor=url,
+                options=chrome_options,
+                client_config=client_config,
+            )
         except OppoCloudApiClientError:
             raise
         except Exception as exception:
-            self._browser = None
+            self._driver = None
             msg = f"connecting to remote browser at {url} - {exception}"
             raise OppoCloudApiClientCommunicationError(msg) from exception
 
-        return self._browser
-
-    async def _get_or_create_context(self) -> BrowserContext:
-        """Get existing BrowserContext or create a new one."""
-        if self._context is not None:
-            return self._context
-
-        browser = await self._get_or_create_browser()
-        self._context = await browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-        )
-        self._context.set_default_timeout(10000)
-        return self._context
+        return self._driver
 
     async def async_cleanup(self) -> None:
-        """Clean up browser resources."""
-        if self._context:
-            await self._context.close()
-            self._context = None
+        """Clean up WebDriver resources."""
+        if not self._driver:
+            return
 
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
+        def _cleanup_driver() -> None:
+            if not self._driver:
+                return
+            try:
+                self._driver.quit()
+            except WebDriverException:
+                pass
+            finally:
+                self._driver = None
 
-        if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None
-
-        # Clean up Selenium env var to avoid leaking into other integrations
-        os.environ.pop("SELENIUM_REMOTE_URL", None)
+        await asyncio.get_running_loop().run_in_executor(None, _cleanup_driver)
 
     async def async_login_oppo_cloud(self) -> None:
-        """Log in to OPPO Cloud using Playwright."""
+        """Log in to OPPO Cloud using Selenium."""
         try:
-            context = await self._get_or_create_context()
-            page = await context.new_page()
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._login_oppo_cloud
+            )
+        except OppoCloudApiClientAuthenticationError:
+            raise
+        except OppoCloudApiClientCommunicationError:
+            raise
+        except TimeoutException as exception:
+            msg = f"login - {exception}"
+            raise OppoCloudApiClientError(msg) from exception
+        except Exception as exception:
+            msg = f"Unexpected login - {exception}"
+            raise OppoCloudApiClientError(msg) from exception
 
-            try:
-                await page.goto(
-                    CONF_OPPO_CLOUD_LOGIN_URL, wait_until="domcontentloaded"
+    def _login_oppo_cloud(self) -> None:
+        """Log in to OPPO Cloud using Selenium (sync)."""
+        driver = self._get_or_create_driver()
+        wait = WebDriverWait(driver, 10)
+
+        driver.get(CONF_OPPO_CLOUD_LOGIN_URL)
+        LOGGER.info("Navigated to OPPO Cloud login page")
+
+        # Dismiss ToS if it appears
+        with contextlib.suppress(TimeoutException):
+            WebDriverWait(driver, 3).until(
+                expected_conditions.element_to_be_clickable(
+                    (By.XPATH, "//*[normalize-space()='Agree and Close']")
                 )
-                LOGGER.info("Navigated to OPPO Cloud login page")
+            ).click()
+            LOGGER.debug("Dismissed ToS dialog")
 
-                # Click "Sign in" button
-                await page.get_by_role("banner").get_by_text("Sign in").click()
-
-                # Wait for login iframe and interact with it
-                iframe_locator = page.frame_locator("iframe").first
-
-                # Fill in credentials (implicitly waits for iframe to load)
-                await iframe_locator.get_by_role("textbox", name="Phone number").fill(
-                    self._username
+        # Click "Sign in" button in the header/banner area
+        wait.until(
+            expected_conditions.element_to_be_clickable(
+                (
+                    By.XPATH,
+                    "//header//*[normalize-space()='Sign in'] | "
+                    "//*[@role='banner']//*[normalize-space()='Sign in']",
                 )
-                await iframe_locator.get_by_role("textbox", name="Password").fill(
-                    self._password
+            )
+        ).click()
+
+        # Wait for login iframe and switch to it
+        login_iframe = wait.until(
+            expected_conditions.presence_of_element_located((By.CSS_SELECTOR, "iframe"))
+        )
+        driver.switch_to.frame(login_iframe)
+
+        try:
+            # Enter tele and password
+            username_el = wait.until(
+                expected_conditions.visibility_of_element_located(
+                    (By.CSS_SELECTOR, "input[type='tel']")
                 )
+            )
+            username_el.send_keys(Keys.CONTROL + "a")
+            username_el.send_keys(Keys.DELETE)
+            username_el.send_keys(self._username)
 
-                # Now that iframe is confirmed loaded, get its Frame object
-                # so we can execute JavaScript inside it.
-                # (frame_locator can only locate elements, not run JS)
-                iframe_frame = None
-                for frame in page.frames:
-                    if frame != page.main_frame:
-                        iframe_frame = frame
-                        break
+            password_el = wait.until(
+                expected_conditions.visibility_of_element_located(
+                    (By.CSS_SELECTOR, "input[type='password']")
+                )
+            )
+            password_el.send_keys(Keys.CONTROL + "a")
+            password_el.send_keys(Keys.DELETE)
+            password_el.send_keys(self._password)
 
-                # Install a passive MutationObserver to capture error messages
-                observer_script = """
+            # Install a passive MutationObserver to capture error messages
+            observer_script = """
 window.__capturedErrors = [];
 const regex = /incorrect|error|fail|wrong|invalid/i;
 const observer = new MutationObserver(mutations => {
@@ -230,148 +222,138 @@ const observer = new MutationObserver(mutations => {
     }
 });
 observer.observe(document, { childList: true, subtree: true, characterData: true });
-                """
-                await page.evaluate(observer_script)
-                if iframe_frame:
-                    await iframe_frame.evaluate(observer_script)
+            """
+            driver.execute_script(observer_script)
 
-                # Click sign in button
-                await iframe_locator.get_by_role("button", name="Sign in").click(
-                    timeout=5000
+            # The iframe uses custom <div role="button"> instead of native <button>,
+            # and "disabled" state is a CSS class "uc-button-disabled" not an attr.
+            # Wait for the visible Sign In button to lose its disabled class.
+            sign_in_btn = WebDriverWait(driver, 10).until(
+                lambda d: next(
+                    (
+                        el
+                        for el in d.find_elements(By.CSS_SELECTOR, "[role='button']")
+                        if el.is_displayed()
+                        and "Sign in" in (el.text or "")
+                        and "uc-button-disabled"
+                        not in (el.get_attribute("class") or "")
+                    ),
+                    False,
                 )
+            )
+            sign_in_btn.click()
 
-                # Handle "Agree and continue" if it pops up
-                with contextlib.suppress(PlaywrightTimeoutError):
-                    await iframe_locator.get_by_role(
-                        "button", name="Agree and continue"
-                    ).click(timeout=5000)
-                    LOGGER.info("Agreed to terms and conditions")
-
-                # URL change: login success signal
-                try:
-                    await page.wait_for_url(
-                        lambda url: not url.startswith(CONF_OPPO_CLOUD_LOGIN_URL),
-                        timeout=10000,
-                    )
-                    LOGGER.info("OPPO Cloud login successful")
-                except PlaywrightTimeoutError as exception:
-                    # Collect captured errors from both main page and iframe
-                    captured = await page.evaluate(
-                        "() => window.__capturedErrors || []"
-                    )
-                    if iframe_frame:
-                        with contextlib.suppress(Exception):
-                            iframe_errors = await iframe_frame.evaluate(
-                                "() => window.__capturedErrors || []"
+            # Handle "Agree and continue" if it pops up
+            with contextlib.suppress(TimeoutException):
+                agree_btn = WebDriverWait(driver, 5).until(
+                    lambda d: next(
+                        (
+                            el
+                            for el in d.find_elements(
+                                By.CSS_SELECTOR, "[role='button']"
                             )
-                            captured.extend(iframe_errors)
-
-                    captured = list(dict.fromkeys(filter(None, captured)))
-                    msg = (
-                        f"login, looks like {', '.join(captured)}"
-                        if captured
-                        else "login"
+                            if el.is_displayed()
+                            and "Agree and continue" in (el.text or "")
+                        ),
+                        False,
                     )
-                    raise OppoCloudApiClientAuthenticationError(msg) from exception
-            finally:
-                await page.close()
+                )
+                agree_btn.click()
+                LOGGER.info("Agreed to terms and conditions")
 
-        except OppoCloudApiClientAuthenticationError:
-            raise
-        except OppoCloudApiClientCommunicationError:
-            raise
-        except PlaywrightTimeoutError as exception:
-            msg = f"login - {exception}"
-            raise OppoCloudApiClientError(msg) from exception
-        except Exception as exception:
-            msg = f"Unexpected login - {exception}"
-            raise OppoCloudApiClientError(msg) from exception
+            # URL change: login success signal
+            # driver.current_url always returns main page URL even inside iframe
+            try:
+                WebDriverWait(driver, 10).until(
+                    lambda d: not d.current_url.startswith(CONF_OPPO_CLOUD_LOGIN_URL)
+                )
+                LOGGER.info("OPPO Cloud login successful")
+            except TimeoutException as exception:
+                # Collect captured errors from iframe MutationObserver
+                captured = driver.execute_script("return window.__capturedErrors || []")
+                # Clean whitespace and duplicates
+                clean_captured = []
+                for s in captured:
+                    normalized = " ".join(s.split())
+                    if normalized:
+                        clean_captured.append(normalized)
+                captured_str = ", ".join(dict.fromkeys(clean_captured))
+                msg = f"login, looks like {captured_str}" if captured else "login"
+                raise OppoCloudApiClientAuthenticationError(msg) from exception
+        finally:
+            with contextlib.suppress(WebDriverException):
+                driver.switch_to.default_content()
 
     async def async_get_data(self) -> list[OppoCloudDevice]:
         """Get device location data from OPPO Cloud."""
         try:
             if not self._keep_session:
-                # not keeping session, than must login every time
+                # not keeping session, must login every time
                 await self.async_login_oppo_cloud()
-            result = await self._get_devices_data()
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, self._get_devices_data
+            )
         except OppoCloudApiClientAuthenticationError:
             # Not logged in, try to log in
             LOGGER.info("OPPO Cloud not logged in, attempting to log in")
             await self.async_login_oppo_cloud()
             return await self.async_get_data()
-        except PlaywrightTimeoutError as exception:
+        except TimeoutException as exception:
             msg = f"get_devices_data - {exception}"
             raise OppoCloudApiClientError(msg) from exception
         except Exception as exception:
             msg = f"Unexpected get_devices_data - {exception}"
             raise OppoCloudApiClientError(msg) from exception
         finally:
-            # If not keeping session, cleanup after successful data fetch
+            # If not keeping session, cleanup after data fetch
             if not self._keep_session:
                 await self.async_cleanup()
         return result
 
-    async def _get_devices_data(self) -> list[OppoCloudDevice]:
-        """Get device locations using Playwright."""
-        context = await self._get_or_create_context()
-        page = await context.new_page()
+    def _get_devices_data(self) -> list[OppoCloudDevice]:
+        """Get device locations using Selenium WebDriver."""
+        driver = self._get_or_create_driver()
+        driver.get(CONF_OPPO_CLOUD_FIND_URL)
 
+        # Check if redirected to login page
+        if not driver.current_url.startswith(CONF_OPPO_CLOUD_FIND_URL):
+            msg = "not logged in or page redirected unexpectedly"
+            raise OppoCloudApiClientAuthenticationError(msg)
+
+        # Wait for $findVm to be available with device data
+        # This is more reliable than waiting for UI elements
         try:
-            await page.goto(CONF_OPPO_CLOUD_FIND_URL, wait_until="domcontentloaded")
-
-            # Check if redirected to login page
-            if not page.url.startswith(CONF_OPPO_CLOUD_FIND_URL):
-                msg = "not logged in or page redirected unexpectedly"
-                raise OppoCloudApiClientAuthenticationError(msg)
-
-            # Wait for $findVm to be available with device data
-            # This is more reliable than waiting for UI elements
-            try:
-                await page.wait_for_function(
-                    (
-                        "window.$findVm && window.$findVm.deviceList && "
-                        "window.$findVm.deviceList.length > 0"
-                    ),
-                    timeout=30000,
+            WebDriverWait(driver, 15).until(
+                lambda d: d.execute_script(
+                    "return window.$findVm && window.$findVm.deviceList "
+                    "&& window.$findVm.deviceList.length > 0"
                 )
-            except PlaywrightTimeoutError as exception:
-                # Check if there are actually no devices
-                has_find_vm = await page.evaluate("window.$findVm !== undefined")
-                if has_find_vm:
-                    device_list = await page.evaluate("window.$findVm.deviceList || []")
-                    if len(device_list) == 0:
-                        LOGGER.info("No devices found in OPPO Cloud")
-                        return []
-                # If $findVm is not available, might not be logged in
-                msg = "not logged in or session expired"
-                raise OppoCloudApiClientAuthenticationError(msg) from exception
-
-            # Extract all device data directly from JavaScript
-            device_data = await page.evaluate(
-                """
-                () => {
-                    if (!window.$findVm || !window.$findVm.deviceList) return null;
-
-                    return {
-                        deviceList: window.$findVm.deviceList,
-                        points: window.$findVm.points
-                    };
-                }
-                """
             )
+        except TimeoutException as exception:
+            msg = "no devices, maybe session expired?"
+            raise OppoCloudApiClientAuthenticationError(msg) from exception
 
-            if not device_data or not device_data.get("deviceList"):
-                LOGGER.warning("No device data available from $findVm")
-                return []
+        device_data = driver.execute_script(
+            """
+            if (!window.$findVm || !window.$findVm.deviceList || !window.$findVm.points)
+                return null;
+            return {
+                deviceList: window.$findVm.deviceList,
+                points: window.$findVm.points
+            };
+            """
+        )
 
-            devices = self._parse_device_data(
-                device_data["deviceList"], device_data.get("points", [])
-            )
+        if not device_data:
+            LOGGER.warning("$findVm data is unexpected")
+            return []
 
-            LOGGER.info(f"Found {len(devices)} devices in OPPO Cloud")
-            return devices
-        finally:
-            await page.close()
+        devices = self._parse_device_data(
+            device_data["deviceList"], device_data.get("points", [])
+        )
+
+        LOGGER.info("Found %d devices in OPPO Cloud", len(devices))
+        return devices
 
     def _parse_device_data(
         self, devices: list[dict], points: list[dict]
@@ -424,8 +406,9 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         latitude, longitude = gcj2wgs(gcj_lat, gcj_lng)
                     except (KeyError, ValueError, TypeError) as exception:
                         LOGGER.warning(
-                            f"Failed to convert coordinates for "
-                            f"{device_model}: {exception}"
+                            "Failed to convert coordinates for %s: %s",
+                            device_model,
+                            exception,
                         )
 
             # Also try to parse from coordinate field if needed
@@ -439,8 +422,9 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         latitude, longitude = gcj2wgs(gcj_lat, gcj_lng)
                 except (ValueError, AttributeError) as exception:
                     LOGGER.warning(
-                        f"Failed to parse coordinate field for "
-                        f"{device_model}: {exception}"
+                        "Failed to parse coordinate field for %s: %s",
+                        device_model,
+                        exception,
                     )
 
             result.append(
@@ -457,34 +441,30 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
         return result
 
     async def async_test_connection(self) -> bool:
-        """
-        Test connection to browser endpoint and basic functionality.
-
-        Returns:
-            True if connection is successful
-
-        """
+        """Test connection to Selenium Grid and basic functionality."""
         try:
-            context = await self._get_or_create_context()
-            page = await context.new_page()
-
-            try:
-                # Simple test - navigate to a basic page
-                await page.goto(
-                    CONF_OPPO_CLOUD_LOGIN_URL, wait_until="domcontentloaded"
-                )
-                body_text = await page.locator("body").text_content()
-                LOGGER.info(
-                    f"Successfully connected to browser: {(body_text or '')[:50]}..."
-                )
-                return True
-            finally:
-                await page.close()
-
-        except PlaywrightTimeoutError as exception:
-            await self.async_cleanup()
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self._test_connection
+            )
+        except Exception as exception:
             msg = f"Connection test failed - {exception}"
             raise OppoCloudApiClientCommunicationError(msg) from exception
+
+    def _test_connection(self) -> bool:
+        """Test Selenium Grid connection (sync)."""
+        try:
+            driver = self._get_or_create_driver()
+            driver.get(CONF_OPPO_CLOUD_LOGIN_URL)
+            body = WebDriverWait(driver, 10).until(
+                expected_conditions.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            LOGGER.info(
+                "Successfully connected to Selenium Grid: %s...", body.text[:50]
+            )
+        except Exception:
+            self._cleanup_driver()
+            raise
+        return True
 
 
 # ruff: noqa: T201, I001, PLC0415
@@ -524,21 +504,21 @@ async def _debug_main() -> None:
 
     try:
         # Test 1: Connection test
-        print("1️⃣  Testing Selenium Grid connection...")
+        print("    Testing Selenium Grid connection...")
         connection_ok = await client.async_test_connection()
         print(f"   ✅ Connection successful: {connection_ok}")
         print()
 
         if connection_ok:
             # Test 2: Get device data
-            print("2️⃣  Getting device data...")
+            print("    Getting device data...")
             start = loop.time()
             data = await client.async_get_data()
             elapsed = loop.time() - start
-            print(f"   ⏱️ Fetch time: {elapsed:.3f}s")
-            print(f"   📱 Found {len(data)} devices:")
+            print(f"    Found {len(data)} devices:")
             for device in data:
                 print(f"     - {device}")
+            print(f"    Fetch time: {elapsed:.3f}s")
             print()
 
         print("✅ All tests completed successfully!")
@@ -550,6 +530,6 @@ async def _debug_main() -> None:
 
 
 if __name__ == "__main__":
-    print("🚀 OPPO Cloud Tracker - Playwright API Debug Tool")
+    print("🚀 OPPO Cloud Tracker - Selenium API Debug Tool")
     print("=" * 50)
     asyncio.run(_debug_main())

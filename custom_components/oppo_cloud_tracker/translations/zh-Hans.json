@@ -5,7 +5,7 @@
                 "title": "配置 OPPO Cloud Tracker",
                 "description": "请输入你的浏览器后端地址和 OPPO 账号信息。",
                 "data": {
-                    "selenium_grid_url": "浏览器后端地址（Playwright CDP/Selenium Grid）",
+                    "selenium_grid_url": "浏览器后端地址（Selenium Grid）",
                     "username": "OPPO 手机号（仅支持 +86）",
                     "password": "OPPO 密码"
                 }
@@ -14,7 +14,7 @@
                 "title": "重新认证 OPPO Cloud Tracker",
                 "description": "您的 OPPO 凭据已过期或无效。请为账号 {username} 输入更新的凭据",
                 "data": {
-                    "selenium_grid_url": "浏览器后端地址（Playwright CDP/Selenium Grid）",
+                    "selenium_grid_url": "浏览器后端地址（Selenium Grid）",
                     "username": "OPPO 手机号（仅支持 +86）",
                     "password": "OPPO 密码"
                 }

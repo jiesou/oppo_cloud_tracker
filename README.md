@@ -20,47 +20,15 @@ This integration provides the following information for your OPPO/OnePlus device
 
 ## Requirements
 
-The integration works via Playwright (Selenium-like) and only supports login by phone number and password.
+The integration works via Selenium WebDriver and only supports login by phone number and password.
 
 **Warning: Password storage security is NOT guaranteed**
 
-It requires a **separate remote browser backend supporting CDP, such as [Browserless](https://github.com/browserless/browserless)**, or it also supports [Selenium Grid](https://www.selenium.dev/documentation/grid) instances.
-
-If you don't have a machine to run Browserless locally, you can also consider some cloud-based solutions.
+It requires a **separate [Selenium Grid](https://www.selenium.dev/documentation/grid) instance** as the remote browser backend.
 
 ### Remote Browser Backend Setup
 
-#### Option 1: Playwright + CDP (Recommended)
-It is recommended to deploy a Playwright + CDP browser backend using the official Docker `browserless/chromium` image.
-
-Example `docker-compose.yml`:
-```yaml
-name: browserless
-services:
-  browserless-chrome:
-    container_name: browserless-chrome
-    image: ghcr.io/browserless/chromium:latest
-    environment:
-      - CONCURRENT=3
-      - TIMEOUT=600000
-      - TOKEN=[TOKEN(changeme)]
-    ports:
-      - target: 3000
-        published: "3000"
-        protocol: tcp
-    restart: unless-stopped
-```
-
-Then you will get your "Remote Browser URL", which looks like:
-`ws://[your_docker_hostname]:3000/chromium/playwright?token=[TOKEN(changeme)]`
-Make sure your Home Assistant instance can access the Docker container.
-
-If you don't need the advanced features of Browserless, a standard `playwright/chrome` image should also work.
-
-#### Option 2: Selenium Grid
-
-You can also use the traditional Selenium Grid API, but it is not recommended.
-This implementation is based on [Playwright's support for Selenium Grid](https://playwright.dev/python/docs/selenium-grid). Selenium is less reliable and has worse performance and efficiency compared to Playwright + CDP.
+#### Selenium Grid (Docker)
 
 It is recommended to deploy Selenium Grid using the official Docker `selenium/standalone-chrome` image.
 
@@ -73,9 +41,8 @@ services:
     image: selenium/standalone-chrome:latest
     shm_size: 2gb
     environment:
-      # External will access standalone-chrome via SE_NODE_GRID_URL, which is necessary if network forward is configured.
+      # External will access standalone-chrome via SE_NODE_GRID_URL, which is maybe needed if network forward is configured.
       -  SE_NODE_GRID_URL=http://[your_docker_hostname]:4444
-    shm_size: 2gb
     ports:
       - target: 4444
         published: "4444"
@@ -115,8 +82,7 @@ Make sure your Home Assistant instance can access the Docker container.
 
 You will need to provide:
 
-- **Remote Browser URL**: The URL of your remote browser instance
-  - For Browserless: `ws://[your_docker_hostname]:3000/chromium/playwright?token=[TOKEN(changeme)]`
+- **Remote Browser URL**: The URL of your Selenium Grid instance
   - For Selenium Grid: `http://[your_docker_hostname]:4444/wd/hub`
   - Make sure your Home Assistant instance can access the Docker container
 - **OPPO Phone Number**: Your OPPO account phone number (**only +86 supported**)
@@ -156,15 +122,15 @@ It also provides a `oppo_cloud_tracker.locate` service for manually triggering a
    - Check if the disk space is full
 
 4. **Strange errors or timeouts**
-   - Since the integration operates via a browser, initialization and fetching usually take more than 10 seconds, which is normal. It is recommended to set a 60s `TIMEOUT` for the Browserless container.
-   - If it consistently takes more than 30 seconds, it's best to check and restart the remote browser container.
-   - Restart the Docker container:
+   - Since the integration operates via a remote browser, initialization and fetching usually take more than 10 seconds, which is normal.
+   - If it consistently takes more than 30 seconds, it's best to check and restart the Selenium Grid container.
+   - Restart the Selenium Grid Docker container:
      ```bash
-     docker restart browserless-chrome
+     docker restart selenium-chrome
      ```
    - Check container logs:
      ```bash
-     docker logs browserless-chrome
+     docker logs selenium-chrome
      ```
 
 ### Tips & Tricks

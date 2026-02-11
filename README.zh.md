@@ -18,48 +18,16 @@
 
 ## 预先要求
 
-集成是通过 Playwright（类 Selenium）实现的，只支持手机号和密码登录。同时：
+集成是通过 Selenium WebDriver 实现的，只支持手机号和密码登录。同时：
 **警告：密码存储的安全性不受保证**
 
-它需要一个**独立的支持 CDP 的远程浏览器后端，例如 [Browserless](https://github.com/browserless/browserless)**，或者也支持 [Selenium Grid](https://www.selenium.dev/zh-cn/documentation/grid) 实例
-
-如果没有合适的机子来跑 Browserless，也可以考虑一些部署在云上的方案，选择也有很多
+它需要一个**独立的 [Selenium Grid](https://www.selenium.dev/zh-cn/documentation/grid) 实例**作为远程浏览器后端。
 
 ### 远程浏览器后端设置
 
-#### 方案一：Playwright + CDP
-推荐直接用 Docker browserless/chromium 镜像来部署 Playwright + CDP 浏览器后端
+#### Selenium Grid（Docker）
 
-参考 `docker-compose.yml`：
-```yaml
-name: browserless
-services:
-  browserless-chrome:
-    container_name: browserless-chrome
-    image: ghcr.io/browserless/chromium:latest
-    environment:
-      - CONCURRENT=3
-      - TIMEOUT=600000
-      - TOKEN=[TOKEN(changeme)]
-    ports:
-      - target: 3000
-        published: "3000"
-        protocol: tcp
-    restart: unless-stopped
-```
-
-然后你就能得到你的“浏览器后端地址”，形似
-`ws://[your_docker_hostname]:3000/chromium/playwright?token=[TOKEN(changeme)]`
-请确保 Home Assistant 实例能够访问到 Docker 容器
-
-如果不需要 Browserless 的复杂功能，普通的 playwright/chrome 镜像当然也应该能正常工作
-
-#### 方案二：Selenium Grid
-
-可以使用经典传统 Selenium Grid API 的方案。但不建议使用。
-这个实现基于 [Playwright 的支持](https://playwright.dev/python/docs/selenium-grid)。因为 Selenium 不如 Playwright + CDP 来得可靠，性能和效率都更差一些。
-
-推荐使用 Docker selenium/standalone-chrome 镜像来部署 Selenium Grid。
+推荐直接使用 Docker selenium/standalone-chrome 镜像来部署 Selenium Grid。
 
 参考 `docker-compose.yml`：
 ```yaml
@@ -70,7 +38,7 @@ services:
     image: selenium/standalone-chrome:latest
     shm_size: 2gb
     environment:
-      # 外部会通过 SE_NODE_GRID_URL 来访问 standalone-chrome，如果设置了网络映射那这便是必要的
+      # 外部会通过 SE_NODE_GRID_URL 来访问 standalone-chrome，如果有网络映射那这可能需要设置
       -  SE_NODE_GRID_URL=http://[your_docker_hostname]:4444
     ports:
       - target: 4444
@@ -111,9 +79,7 @@ services:
 
 您需要提供：
 
-- **浏览器后端地址**：您的浏览器后端实例的 URL
-  - 对于 Browserless：`ws://[your_docker_hostname]:3000/chromium/playwright?token=[TOKEN(changeme)]`
-  - 对于 Selenium Grid：`http://[your_docker_hostname]:4444/wd/hub`
+- **浏览器后端地址**：您的 Selenium Grid 实例的 URL，形似 `http://[your_docker_hostname]:4444/wd/hub`
   - 请确保 Home Assistant 实例能够访问到 Docker 容器
 - **OPPO 手机号**：您的 OPPO 账户手机号（仅支持 +86）
 - **OPPO 密码**：您的 OPPO 账户密码， **再次警告：密码安全性不受保证**
@@ -152,15 +118,15 @@ services:
    - 检查是否磁盘空间已经不足了
 
 4. **奇怪的错误或超时**
-   - 由于通过 Playwright 操作，集成初始化、fetching 的动作一般要花费十几秒钟，比一般集成更费时间是正常的。建议为 Browserless 容器设置 60s 的 TIMEOUT
-   - 但如果花费的时间经常超过 30 秒，那最好检查、重启一下 Browserless
-   - 重启 Browserless Docker 容器：
+   - 由于通过 Selenium 操作浏览器，集成初始化、fetching 的动作一般要花费十几秒钟，比一般集成更费时间是正常的
+   - 但如果花费的时间经常超过 30 秒，那最好检查、重启一下 Selenium Grid
+   - 重启 Selenium Grid Docker 容器：
      ```bash
-     docker restart browserless-chrome
+     docker restart selenium-chrome
      ```
-   - 检查 Browserless Docker 日志：
+   - 检查 Selenium Grid Docker 日志：
      ```bash
-     docker logs browserless-chrome
+     docker logs selenium-chrome
      ```
 
 ### Tips & Tricks

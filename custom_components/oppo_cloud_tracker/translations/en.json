@@ -5,7 +5,7 @@
                 "title": "Configure OPPO Cloud Tracker",
                 "description": "Enter your Remote Browser URL and OPPO account credentials.",
                 "data": {
-                    "selenium_grid_url": "Remote Browser URL (Selenium Grid/Playwright)",
+                    "selenium_grid_url": "Remote Browser URL (Selenium Grid)",
                     "username": "OPPO Phone number (+86 only)",
                     "password": "OPPO Password"
                 }
@@ -14,7 +14,7 @@
                 "title": "Re-authenticate OPPO Cloud Tracker",
                 "description": "Your OPPO credentials have expired or are invalid. Please enter your updated credentials for account: {username}",
                 "data": {
-                    "selenium_grid_url": "Remote Browser URL (Selenium Grid/Playwright)",
+                    "selenium_grid_url": "Remote Browser URL (Selenium Grid)",
                     "username": "OPPO Phone number (+86 only)",
                     "password": "OPPO Password"
                 }
