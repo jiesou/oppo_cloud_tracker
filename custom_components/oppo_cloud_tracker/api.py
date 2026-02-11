@@ -83,10 +83,11 @@ class OppoCloudApiClient:
         if self._driver is not None:
             try:
                 # Check if driver session is still alive
-                self._driver.current_url
-                return self._driver
+                _ = self._driver.current_url
             except WebDriverException:
                 self._driver = None
+            else:
+                return self._driver
 
         url = self._remote_browser_url.strip()
         try:
@@ -113,22 +114,22 @@ class OppoCloudApiClient:
 
         return self._driver
 
+    def _cleanup_driver(self) -> None:
+        """Clean up the WebDriver instance (sync)."""
+        if not self._driver:
+            return
+        try:
+            self._driver.quit()
+        except WebDriverException:
+            pass
+        finally:
+            self._driver = None
+
     async def async_cleanup(self) -> None:
         """Clean up WebDriver resources."""
         if not self._driver:
             return
-
-        def _cleanup_driver() -> None:
-            if not self._driver:
-                return
-            try:
-                self._driver.quit()
-            except WebDriverException:
-                pass
-            finally:
-                self._driver = None
-
-        await asyncio.get_running_loop().run_in_executor(None, _cleanup_driver)
+        await asyncio.get_running_loop().run_in_executor(None, self._cleanup_driver)
 
     async def async_login_oppo_cloud(self) -> None:
         """Log in to OPPO Cloud using Selenium."""
@@ -150,21 +151,12 @@ class OppoCloudApiClient:
     def _login_oppo_cloud(self) -> None:
         """Log in to OPPO Cloud using Selenium (sync)."""
         driver = self._get_or_create_driver()
-        wait = WebDriverWait(driver, 10)
+        wait = WebDriverWait(driver, 10)  # default timeout
 
         driver.get(CONF_OPPO_CLOUD_LOGIN_URL)
         LOGGER.info("Navigated to OPPO Cloud login page")
 
-        # Dismiss ToS if it appears
-        with contextlib.suppress(TimeoutException):
-            WebDriverWait(driver, 3).until(
-                expected_conditions.element_to_be_clickable(
-                    (By.XPATH, "//*[normalize-space()='Agree and Close']")
-                )
-            ).click()
-            LOGGER.debug("Dismissed ToS dialog")
-
-        # Click "Sign in" button in the header/banner area
+        # Click "Sign in" button in the banner
         wait.until(
             expected_conditions.element_to_be_clickable(
                 (
@@ -225,10 +217,10 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             """
             driver.execute_script(observer_script)
 
-            # The iframe uses custom <div role="button"> instead of native <button>,
+            # It uses custom <div role="button"> instead of native <button>,
             # and "disabled" state is a CSS class "uc-button-disabled" not an attr.
             # Wait for the visible Sign In button to lose its disabled class.
-            sign_in_btn = WebDriverWait(driver, 10).until(
+            sign_in_btn = wait.until(
                 lambda d: next(
                     (
                         el
@@ -238,10 +230,10 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         and "uc-button-disabled"
                         not in (el.get_attribute("class") or "")
                     ),
-                    False,
+                    None,
                 )
             )
-            sign_in_btn.click()
+            sign_in_btn.click()  # pyright: ignore[reportOptionalMemberAccess]
 
             # Handle "Agree and continue" if it pops up
             with contextlib.suppress(TimeoutException):
@@ -255,16 +247,16 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                             if el.is_displayed()
                             and "Agree and continue" in (el.text or "")
                         ),
-                        False,
+                        None,
                     )
                 )
-                agree_btn.click()
-                LOGGER.info("Agreed to terms and conditions")
+                agree_btn.click()  # pyright: ignore[reportOptionalMemberAccess]
+                LOGGER.info("Agreed to ToS")
 
             # URL change: login success signal
             # driver.current_url always returns main page URL even inside iframe
             try:
-                WebDriverWait(driver, 10).until(
+                wait.until(
                     lambda d: not d.current_url.startswith(CONF_OPPO_CLOUD_LOGIN_URL)
                 )
                 LOGGER.info("OPPO Cloud login successful")
