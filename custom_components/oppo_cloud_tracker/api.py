@@ -327,7 +327,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
         except TimeoutException:
             LOGGER.warning("device_location overlay did not hide, continuing anyway")
 
-        # Step 2: Wait for all "正在更新" (updating) spinners to disappear
+        # Step 2: Wait for all "正在更新"spinners to disappear
         try:
             WebDriverWait(driver, 30).until(
                 lambda d: not d.find_elements(By.XPATH, "//span[text()='正在更新']")
@@ -335,7 +335,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
         except TimeoutException:
             LOGGER.warning("Some devices are still updating, continuing anyway")
 
-        # Step 3: Wait for every device item to have location info or an error state
+        # Step 3: Wait for device item to have location info
         try:
             wait.until(
                 lambda d: (
@@ -385,25 +385,21 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
     def _parse_device_data(
         self, devices: list[dict], points: list[dict]
     ) -> list[OppoCloudDevice]:
-        """
-        Parse device data from window.$findVm.
-
-        Args:
-            devices: List of device objects from $findVm.deviceList
-            points: List of coordinate points from $findVm.points
-
-        Returns:
-            List of OppoCloudDevice objects
-
-        """
+        """Parse a single device data."""
         result: list[OppoCloudDevice] = []
 
         for idx, device in enumerate(devices):
-            # Extract device name
+            # Device model/name
             device_model = device.get("deviceName", "Unknown Device")
 
-            # Parse POI (Point of Interest) which contains location and time
-            # Format: "location · time" or just "location"
+            # Check is_online
+            is_online = (
+                device.get("onlineStatus") == 1
+                or device.get("locationStatus") == "online"
+            )
+
+            # Check location_name and last_seen
+            # "XX地 · 刚刚"
             poi = device.get("poi", "") or device.get("simplePoi", "")
             if "·" in poi:
                 location_name, last_seen = [s.strip() for s in poi.split(" · ", 1)]
@@ -411,19 +407,11 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                 location_name = poi.strip()
                 last_seen = device.get("poiTime")
 
-            # Check online status
-            # onlineStatus: 1 = online, 0 = offline
-            # locationStatus: "online" or other values
-            is_online = (
-                device.get("onlineStatus") == 1
-                or device.get("locationStatus") == "online"
-            )
-
-            # Get coordinates from points array
+            # Check lat/lng
             latitude = None
             longitude = None
 
-            # Try to get coordinates from corresponding point
+            # Method 1: get coordinates from "points"
             if idx < len(points):
                 point = points[idx]
                 if point and "lat" in point and "lng" in point:
@@ -438,7 +426,8 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                             exception,
                         )
 
-            # Also try to parse from coordinate field if needed
+            # Method 2: parse from coordinate field
+            # "30.0,120.0"
             if latitude is None and "coordinate" in device:
                 try:
                     coord_str = device["coordinate"]
