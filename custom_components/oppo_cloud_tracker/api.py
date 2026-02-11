@@ -306,25 +306,60 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
         """Get device locations using Selenium WebDriver."""
         driver = self._get_or_create_driver()
         driver.get(CONF_OPPO_CLOUD_FIND_URL)
+        wait = WebDriverWait(driver, 10)  # default timeout
 
         # Check if redirected to login page
         if not driver.current_url.startswith(CONF_OPPO_CLOUD_FIND_URL):
             msg = "not logged in or page redirected unexpectedly"
             raise OppoCloudApiClientAuthenticationError(msg)
 
-        # Wait for $findVm to be available with device data
-        # This is more reliable than waiting for UI elements
+        # Wait for the page to finish refreshing GPS locations from phones.
+        # otherwise we get old, server-side cached old data
+
+        # Step 1: Wait for the loading overlay (div.device_location) to hide
         try:
-            WebDriverWait(driver, 15).until(
-                lambda d: d.execute_script(
-                    "return window.$findVm && window.$findVm.deviceList "
-                    "&& window.$findVm.deviceList.length > 0"
+            wait.until(
+                lambda d: d.find_element(
+                    By.CSS_SELECTOR, "div.device_location"
+                ).value_of_css_property("display")
+                == "none"
+            )
+        except TimeoutException:
+            LOGGER.warning("device_location overlay did not hide, continuing anyway")
+
+        # Step 2: Wait for all "正在更新" (updating) spinners to disappear
+        try:
+            WebDriverWait(driver, 30).until(
+                lambda d: not d.find_elements(By.XPATH, "//span[text()='正在更新']")
+            )
+        except TimeoutException:
+            LOGGER.warning("Some devices are still updating, continuing anyway")
+
+        # Step 3: Wait for every device item to have location info or an error state
+        try:
+            wait.until(
+                lambda d: (
+                    all(
+                        item.find_elements(By.CSS_SELECTOR, ".device-poi")
+                        or item.find_elements(
+                            By.CSS_SELECTOR,
+                            ".device-status-wrap:not(.positioning)",
+                        )
+                        for item in d.find_elements(
+                            By.CSS_SELECTOR,
+                            "#device-list .device-list ul > li",
+                        )
+                    )
+                    if d.find_elements(
+                        By.CSS_SELECTOR, "#device-list .device-list ul > li"
+                    )
+                    else True
                 )
             )
-        except TimeoutException as exception:
-            msg = "no devices, maybe session expired?"
-            raise OppoCloudApiClientAuthenticationError(msg) from exception
+        except TimeoutException:
+            LOGGER.warning("Not all device items settled, continuing anyway")
 
+        # Now read the fresh data from $findVm
         device_data = driver.execute_script(
             """
             if (!window.$findVm || !window.$findVm.deviceList || !window.$findVm.points)
