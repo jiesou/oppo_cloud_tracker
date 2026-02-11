@@ -5,7 +5,7 @@
                 "title": "配置 OPPO Cloud Tracker",
                 "description": "请输入你的浏览器后端地址和 OPPO 账号信息。",
                 "data": {
-                    "remote_browser_url": "浏览器后端地址（Playwright CDP/Selenium Grid）",
+                    "selenium_grid_url": "浏览器后端地址（Playwright CDP/Selenium Grid）",
                     "username": "OPPO 手机号（仅支持 +86）",
                     "password": "OPPO 密码"
                 }
@@ -14,16 +14,16 @@
                 "title": "重新认证 OPPO Cloud Tracker",
                 "description": "您的 OPPO 凭据已过期或无效。请为账号 {username} 输入更新的凭据",
                 "data": {
-                    "remote_browser_url": "浏览器后端地址（Playwright CDP/Selenium Grid）",
+                    "selenium_grid_url": "浏览器后端地址（Playwright CDP/Selenium Grid）",
                     "username": "OPPO 手机号（仅支持 +86）",
                     "password": "OPPO 密码"
                 }
             }
         },
         "error": {
-            "auth": "OPPO 登录失败。",
-            "connection": "无法连接到浏览器后端。",
-            "unknown": "配置过程中发生未知错误。",
+            "auth": "OPPO 登录失败 {error_detail}",
+            "connection": "无法连接到浏览器后端 {error_detail}",
+            "unknown": "发生未知错误 {error_detail}",
             "wrong_account": "用户名与现有账号不匹配。请使用相同账号或删除后重新添加集成。"
         },
         "abort": {

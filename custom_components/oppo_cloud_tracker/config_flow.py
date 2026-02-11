@@ -31,6 +31,7 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.ConfigFlowResult:
         """Handle a flow initialized by the user."""
         _errors = {}
+        _description_placeholders = {}
         if user_input is not None:
             try:
                 await self._test_credentials(
@@ -41,12 +42,15 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             except OppoCloudApiClientAuthenticationError as exception:
                 LOGGER.warning(exception)
                 _errors["base"] = "auth"
+                _description_placeholders["error_detail"] = str(exception)
             except OppoCloudApiClientCommunicationError as exception:
                 LOGGER.error(exception)
                 _errors["base"] = "connection"
+                _description_placeholders["error_detail"] = str(exception)
             except OppoCloudApiClientError as exception:
                 LOGGER.exception(exception)
                 _errors["base"] = "unknown"
+                _description_placeholders["error_detail"] = str(exception)
             else:
                 await self.async_set_unique_id(
                     # Use HeyTap username as unique identifier
@@ -88,6 +92,7 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 },
             ),
             errors=_errors,
+            description_placeholders=_description_placeholders,
         )
 
     async def async_step_reauth(
@@ -126,12 +131,15 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             except OppoCloudApiClientAuthenticationError as exception:
                 LOGGER.warning(exception)
                 errors["base"] = "auth"
+                user_input["error_detail"] = str(exception)
             except OppoCloudApiClientCommunicationError as exception:
                 LOGGER.error(exception)
                 errors["base"] = "connection"
+                user_input["error_detail"] = str(exception)
             except OppoCloudApiClientError as exception:
                 LOGGER.exception(exception)
                 errors["base"] = "unknown"
+                user_input["error_detail"] = str(exception)
             else:
                 # Check if the username matches the existing entry
                 if self.reauth_entry:
@@ -203,6 +211,7 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 "username": username_placeholder,
+                "error_detail": (user_input or {}).get("error_detail", ""),
             },
         )
 
@@ -217,8 +226,10 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             remote_browser_url=remote_browser_url,
         )
         # Test connection to Selenium Grid
-        await client.async_login_oppo_cloud()
-        await client.async_cleanup()
+        try:
+            await client.async_login_oppo_cloud()
+        finally:
+            await client.async_cleanup()
 
     @staticmethod
     @callback
@@ -244,7 +255,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=self.add_suggested_values_to_schema(
                 vol.Schema(
                     {
-                        vol.Optional(CONF_SCAN_INTERVAL): vol.All(
+                        # default to 300 seconds, 5 minutes
+                        vol.Required(CONF_SCAN_INTERVAL, default=300): vol.All(
                             vol.Coerce(int), vol.Range(min=30, max=3600)
                         ),
                     }

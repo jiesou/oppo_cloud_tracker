@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from urllib.parse import urlparse
+import contextlib
 
 from playwright.async_api import (
     async_playwright,
@@ -29,15 +30,6 @@ class OppoCloudApiClientError(Exception):
     def __init__(self, message: str = "unexpected") -> None:
         """Initialize the OppoCloudApiClientError with a message."""
         super().__init__(message)
-
-
-class OppoCloudApiClientPlaywrightTimeoutError(OppoCloudApiClientError):
-    """Exception to indicate a timeout error."""
-
-    def __init__(self, context: str = "unexpected") -> None:
-        """Initialize the OppoCloudApiClientPlaywrightTimeoutError with a message."""
-        super().__init__(f"when {context}")
-
 
 class OppoCloudApiClientCommunicationError(OppoCloudApiClientError):
     """Exception to indicate a communication error."""
@@ -159,15 +151,10 @@ class OppoCloudApiClient:
             return self._context
 
         browser = await self._get_or_create_browser()
-        user_agent = (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
         self._context = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent=user_agent,
         )
+        self._context.set_default_timeout(10000)
         return self._context
 
     async def async_cleanup(self) -> None:
@@ -197,14 +184,15 @@ class OppoCloudApiClient:
                 await page.goto(
                     CONF_OPPO_CLOUD_LOGIN_URL, wait_until="domcontentloaded"
                 )
+                LOGGER.info("Navigated to OPPO Cloud login page")
 
-                # Click "Sign in" button - use natural waiting
+                # Click "Sign in" button
                 await page.get_by_role("banner").get_by_text("Sign in").click()
 
                 # Wait for login iframe and interact with it
                 iframe_locator = page.frame_locator("iframe").first
 
-                # Fill in credentials - Playwright auto-waits for elements
+                # Fill in credentials (implicitly waits for iframe to load)
                 await iframe_locator.get_by_role("textbox", name="Phone number").fill(
                     self._username
                 )
@@ -212,51 +200,89 @@ class OppoCloudApiClient:
                     self._password
                 )
 
-                # Click sign in button - Playwright waits for it to be enabled
-                await iframe_locator.get_by_role("button", name="Sign in").click()
+                # Now that iframe is confirmed loaded, get its Frame object
+                # so we can execute JavaScript inside it.
+                # (frame_locator can only locate elements, not run JS)
+                iframe_frame = None
+                for frame in page.frames:
+                    if frame != page.main_frame:
+                        iframe_frame = frame
+                        break
 
-                # Handle "Terms and conditions" dialog if it appears
-                agree_button = iframe_locator.get_by_role(
-                    "button", name="Agree and continue"
+                # Install a passive MutationObserver to capture error messages
+                observer_script = """
+window.__capturedErrors = [];
+const regex = /incorrect|error|fail|wrong|invalid/i;
+const observer = new MutationObserver(mutations => {
+    for (const m of mutations) {
+        for (const node of m.addedNodes) {
+            const text = (node.textContent || '').trim();
+            if (text && text.length < 500 && regex.test(text)) {
+                window.__capturedErrors.push(text.substring(0, 200));
+            }
+        }
+        if (m.type === 'characterData') {
+            const text = (m.target.textContent || '').trim();
+            if (text && text.length < 500 && regex.test(text)) {
+                window.__capturedErrors.push(text.substring(0, 200));
+            }
+        }
+    }
+});
+observer.observe(document, { childList: true, subtree: true, characterData: true });
+                """
+                await page.evaluate(observer_script)
+                if iframe_frame:
+                    await iframe_frame.evaluate(observer_script)
+
+                # Click sign in button
+                await iframe_locator.get_by_role("button", name="Sign in").click(
+                    timeout=5000
                 )
-                try:
-                    await agree_button.click(timeout=5000)
-                    LOGGER.info("Agreed to terms and conditions")
-                except PlaywrightTimeoutError:
-                    # Dialog might not appear if already agreed before
-                    LOGGER.debug("Terms and conditions dialog did not appear")
 
-                # Wait for successful login - URL change indicates success
+                # Handle "Agree and continue" if it pops up
+                with contextlib.suppress(PlaywrightTimeoutError):
+                    await iframe_locator.get_by_role(
+                        "button", name="Agree and continue"
+                    ).click(timeout=5000)
+                    LOGGER.info("Agreed to terms and conditions")
+
+                # URL change: login success signal
                 try:
                     await page.wait_for_url(
-                        lambda url: (not url.startswith(CONF_OPPO_CLOUD_LOGIN_URL)),
+                        lambda url: not url.startswith(CONF_OPPO_CLOUD_LOGIN_URL),
                         timeout=10000,
                     )
                     LOGGER.info("OPPO Cloud login successful")
                 except PlaywrightTimeoutError as exception:
-                    # Try to detect error messages in iframe
-                    current_url = page.url
-                    LOGGER.error(f"Login timeout, current URL: {current_url}")
+                    # Collect captured errors from both main page and iframe
+                    captured = await page.evaluate(
+                        "() => window.__capturedErrors || []"
+                    )
+                    if iframe_frame:
+                        with contextlib.suppress(Exception):
+                            iframe_errors = await iframe_frame.evaluate(
+                                "() => window.__capturedErrors || []"
+                            )
+                            captured.extend(iframe_errors)
 
-                    try:
-                        error_messages = await iframe_locator.locator(
-                            "text=/error|错误|失败/i"
-                        ).all_text_contents()
-                        if error_messages:
-                            LOGGER.error(f"Login error messages: {error_messages}")
-                    except PlaywrightTimeoutError:
-                        pass
-
-                    msg = "login"
+                    captured = list(dict.fromkeys(filter(None, captured)))
+                    msg = (
+                        f"login, looks like {', '.join(captured)}"
+                        if captured
+                        else "login"
+                    )
                     raise OppoCloudApiClientAuthenticationError(msg) from exception
             finally:
                 await page.close()
 
-        except PlaywrightTimeoutError as exception:
-            msg = f"login - {exception}"
-            raise OppoCloudApiClientPlaywrightTimeoutError(msg) from exception
         except OppoCloudApiClientAuthenticationError:
             raise
+        except OppoCloudApiClientCommunicationError:
+            raise
+        except PlaywrightTimeoutError as exception:
+            msg = f"login - {exception}"
+            raise OppoCloudApiClientError(msg) from exception
         except Exception as exception:
             msg = f"Unexpected login - {exception}"
             raise OppoCloudApiClientError(msg) from exception
@@ -275,7 +301,7 @@ class OppoCloudApiClient:
             return await self.async_get_data()
         except PlaywrightTimeoutError as exception:
             msg = f"get_devices_data - {exception}"
-            raise OppoCloudApiClientPlaywrightTimeoutError(msg) from exception
+            raise OppoCloudApiClientError(msg) from exception
         except Exception as exception:
             msg = f"Unexpected get_devices_data - {exception}"
             raise OppoCloudApiClientError(msg) from exception
