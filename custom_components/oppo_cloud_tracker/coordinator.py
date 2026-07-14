@@ -29,6 +29,6 @@ class OppoCloudDataUpdateCoordinator(DataUpdateCoordinator[list["OppoCloudDevice
         except OppoCloudApiClientAuthenticationError as exception:
             # Raising ConfigEntryAuthFailed will cancel future updates
             # and start a config flow with SOURCE_REAUTH (async_step_reauth)
-            raise ConfigEntryAuthFailed from exception
+            raise ConfigEntryAuthFailed(exception) from exception
         except OppoCloudApiClientError as exception:
             raise UpdateFailed(exception) from exception
