@@ -318,35 +318,32 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             """
             driver.execute_script(observer_script)
 
-            # Retry loop: a mandatory "Agree and continue" ToS dialog may
-            # appear on the first click; dismiss it then click Sign in again.
-            for _ in range(3):
-                # It uses custom <div role="button"> instead of native <button>,
-                # and "disabled" state is a CSS class "uc-button-disabled" not an attr.
-                # Wait for the visible Sign In button to lose its disabled class.
-                try:
-                    sign_in_btn = wait.until(
-                        lambda d: next(
-                            (
-                                el
-                                for el in d.find_elements(
-                                    By.CSS_SELECTOR, "[role='button']"
-                                )
-                                if el.is_displayed()
-                                and "Sign in" in (el.text or "")
-                                and "uc-button-disabled"
-                                not in (el.get_attribute("class") or "")
-                            ),
-                            None,
-                        )
-                    )
-                    sign_in_btn.click()  # pyright: ignore[reportOptionalMemberAccess]
-                except StaleElementReferenceException:
-                    continue
+            import time
 
-                # Handle "Agree and continue" ToS dialog if it pops up
+            # Click Sign In once
+            # It uses custom <div role="button"> instead of native <button>,
+            # "disabled" state is a CSS class "uc-button-disabled" not an attr.
+            sign_in_btn = wait.until(
+                lambda d: next(
+                    (
+                        el
+                        for el in d.find_elements(
+                            By.CSS_SELECTOR, "[role='button']"
+                        )
+                        if el.is_displayed()
+                        and "Sign in" in (el.text or "")
+                        and "uc-button-disabled"
+                        not in (el.get_attribute("class") or "")
+                    ),
+                    None,
+                )
+            )
+            sign_in_btn.click()  # pyright: ignore[reportOptionalMemberAccess]
+
+            # Dismiss ToS dialog — may appear in login iframe or on parent frame
+            def _dismiss_tos(scope: webdriver.Remote) -> bool:
                 try:
-                    agree_btn = WebDriverWait(driver, 5).until(
+                    btn = WebDriverWait(scope, 5).until(
                         lambda d: next(
                             (
                                 el
@@ -363,18 +360,87 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                             None,
                         )
                     )
-                    driver.execute_script(
-                        "arguments[0].dispatchEvent("
-                        "new PointerEvent('click', {bubbles: true}))",
-                        agree_btn,
+                    scope.execute_script("arguments[0].click()", btn)
+                    WebDriverWait(scope, 5).until(
+                        expected_conditions.invisibility_of_element_located(
+                            (By.CSS_SELECTOR, ".uc-dialog")
+                        )
                     )
-                    LOGGER.info("Agreed to ToS")
-                except TimeoutException:
-                    pass
+                    return True
+                except (TimeoutException, WebDriverException):
+                    return False
 
-                # Check for SMS verification iframe inside login iframe
+            tos_dismissed = _dismiss_tos(driver)  # check login iframe
+            if not tos_dismissed:
+                driver.switch_to.default_content()
+                tos_dismissed = _dismiss_tos(driver)  # check parent frame
+                if not tos_dismissed:
+                    driver.switch_to.frame(login_iframe)
+
+            if tos_dismissed:
+                LOGGER.info("Agreed to ToS")
+                # Switch back to login iframe and re-enter credentials
+                driver.switch_to.default_content()
+                login_iframe_el = driver.find_element(
+                    By.CSS_SELECTOR, "iframe"
+                )
+                driver.switch_to.frame(login_iframe_el)
+                username_el = wait.until(
+                    expected_conditions.visibility_of_element_located(
+                        (By.CSS_SELECTOR, "input[type='tel']")
+                    )
+                )
+                password_el = wait.until(
+                    expected_conditions.visibility_of_element_located(
+                        (By.CSS_SELECTOR, "input[type='password']")
+                    )
+                )
+                driver.execute_script(
+                    "var u=arguments[0],p=arguments[1];"
+                    "var s=Object.getOwnPropertyDescriptor("
+                    "HTMLInputElement.prototype,'value').set;"
+                    "s.call(u,arguments[2]);"
+                    "u.dispatchEvent(new Event('input',{bubbles:true}));"
+                    "u.dispatchEvent(new Event('change',{bubbles:true}));"
+                    "s.call(p,arguments[3]);"
+                    "p.dispatchEvent(new Event('input',{bubbles:true}));"
+                    "p.dispatchEvent(new Event('change',{bubbles:true}));"
+                    "p.dispatchEvent(new Event('blur',{bubbles:true}));",
+                    username_el,
+                    password_el,
+                    self._username,
+                    self._password,
+                )
+                sign_in_btn = wait.until(
+                    lambda d: next(
+                        (
+                            el
+                            for el in d.find_elements(
+                                By.CSS_SELECTOR, "[role='button']"
+                            )
+                            if el.is_displayed()
+                            and "Sign in" in (el.text or "")
+                            and "uc-button-disabled"
+                            not in (el.get_attribute("class") or "")
+                        ),
+                        None,
+                    )
+                )
                 try:
-                    verify_iframe = WebDriverWait(driver, 3).until(
+                    btn_class = sign_in_btn.get_attribute("class") or ""
+                except WebDriverException:
+                    btn_class = "stale"
+                LOGGER.info(
+                    "Sign in button state after re-click: class=%s", btn_class
+                )
+                sign_in_btn.click()
+
+            # Poll for login outcome
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                # Check SMS verification iframe inside login iframe
+                try:
+                    verify_iframe = WebDriverWait(driver, 10).until(
                         expected_conditions.presence_of_element_located(
                             (By.CSS_SELECTOR, "iframe[name^='identify-']")
                         )
@@ -384,7 +450,6 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
 
                 if verify_iframe is not None:
                     driver.switch_to.frame(verify_iframe)
-
                     if sms_code is None:
                         get_code_btn = WebDriverWait(driver, 10).until(
                             expected_conditions.element_to_be_clickable(
@@ -409,22 +474,25 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         raise OppoCloudApiClientSmsVerificationError(
                             masked_phone
                         )
-
                     self._complete_sms_verification(driver, sms_code)
+                    break
 
-                # No ToS dialog — wait for login to complete
+                # Check URL change
                 try:
-                    wait.until(
-                        lambda d: not d.current_url.startswith(
-                            CONF_OPPO_CLOUD_LOGIN_URL
-                        )
-                    )
+                    current_url = driver.current_url
+                except WebDriverException:
+                    continue
+                if not current_url.startswith(CONF_OPPO_CLOUD_LOGIN_URL):
                     LOGGER.info("OPPO Cloud login successful")
                     break
-                except TimeoutException:
-                    continue
             else:
-                # All retries exhausted — collect captured errors
+                try:
+                    page_text = driver.find_element(
+                        By.TAG_NAME, "body"
+                    ).text[:300]
+                    LOGGER.error("Login timeout. Page text: %s", page_text)
+                except WebDriverException:
+                    pass
                 captured = driver.execute_script(
                     "return window.__capturedErrors || []"
                 )
