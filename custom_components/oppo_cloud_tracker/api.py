@@ -127,6 +127,10 @@ class OppoCloudApiClient:
                 options=chrome_options,
                 client_config=client_config,
             )
+            # Hide automation markers from detection
+            self._driver.execute_script(
+                "Object.defineProperty(navigator,'webdriver',{get:()=>false})"
+            )
         except OppoCloudApiClientError:
             raise
         except Exception as exception:
