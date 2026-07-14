@@ -621,8 +621,14 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             )
             for item in device_items:
                 driver.execute_script("arguments[0].click();", item)
-                time.sleep(1.5)
-        except Exception as exception:
+                with contextlib.suppress(TimeoutException):
+                    WebDriverWait(driver, 8).until(
+                        expected_conditions.presence_of_element_located(
+                            (By.CSS_SELECTOR, ".battery-wrapper")
+                        )
+                    )
+                time.sleep(1)
+        except WebDriverException as exception:
             LOGGER.warning("Failed to click device item for details: %s", exception)
 
         # Now read the fresh data from $findVm + battery from DOM
@@ -631,22 +637,26 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             if (!window.$findVm || !window.$findVm.deviceList) return null;
             var devices = JSON.parse(JSON.stringify(window.$findVm.deviceList));
 
-            var globalBattery = null;
-            var batteryEl = document.querySelector('.info-battery .count');
-            if (batteryEl) {
-                globalBattery = (batteryEl.innerText || batteryEl.textContent).replace('%', '').trim();
+            function _b(el) {
+                return (el.innerText || el.textContent)
+                    .replace('%', '').trim();
             }
 
+            var globalBatt = null;
+            var battEl = document.querySelector('.battery-wrapper');
+            if (battEl) { globalBatt = _b(battEl); }
+
+            var lis = document.querySelectorAll(
+                "#device-list .device-list ul > li");
             for (var i = 0; i < devices.length; i++) {
-                var localBatteryEl = null;
-                var liElems = document.querySelectorAll("#device-list .device-list ul > li");
-                if (liElems && liElems.length > i) {
-                    localBatteryEl = liElems[i].querySelector('.info-battery .count');
+                var local = null;
+                if (lis && lis.length > i) {
+                    local = lis[i].querySelector('.battery-wrapper');
                 }
-                if (localBatteryEl) {
-                    devices[i]._domBattery = (localBatteryEl.innerText || localBatteryEl.textContent).replace('%', '').trim();
-                } else if (globalBattery) {
-                    devices[i]._domBattery = globalBattery;
+                if (local) {
+                    devices[i]._domBattery = _b(local);
+                } else if (globalBatt) {
+                    devices[i]._domBattery = globalBatt;
                 }
             }
             return {
@@ -664,6 +674,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             device_data["deviceList"], device_data.get("points", [])
         )
 
+        LOGGER.info("Found %d devices in OPPO Cloud", len(devices))
         return devices
 
     def _parse_device_data(
@@ -727,14 +738,16 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         exception,
                     )
 
-            battery_level_raw = device.get("_domBattery") or device.get("batteryLevel") or device.get("batteryPercent")
+            battery_level_raw = (
+                device.get("_domBattery")
+                or device.get("batteryLevel")
+                or device.get("batteryPercent")
+            )
 
             battery_level = None
             if battery_level_raw is not None:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     battery_level = int(str(battery_level_raw).replace("%", "").strip())
-                except (ValueError, TypeError):
-                    pass
 
             result.append(
                 OppoCloudDevice(

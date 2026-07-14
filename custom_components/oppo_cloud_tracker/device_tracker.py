@@ -27,10 +27,16 @@ async def async_setup_entry(
     """Set up the device tracker platform."""
     coordinator = entry.runtime_data.coordinator
 
+    # Wait for initial data to be loaded
     if not coordinator.data:
-        LOGGER.warning("No device data available yet, will add entities when data becomes available")
+        LOGGER.warning(
+            "No device data available yet, will add entities when data "
+            "becomes available"
+        )
         return
 
+    # Create device tracker entities for each device found
+    # coordinator.data is now list[OppoCloudDevice] directly
     devices = coordinator.data
     entities = [
         OppoCloudDeviceTracker(
@@ -60,6 +66,7 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
         super().__init__(coordinator)
         self._device_index = device_index
         self._device = device
+        # Generate a unique device ID based on device model and index
         device_id = f"{device.device_model}_{device_index}"
         self._device_id = device_id
         self._attr_name = device.device_model
@@ -73,7 +80,7 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
     @property
     def location_name(self) -> str | None:
         """Return the location name where the device was last seen."""
-        # 强制返回 None。这是启动 HA 纯 GPS 经纬度判定的核心所在！
+        # 强制返回 None。这是启动 HA 纯 GPS 经纬度判定的核心所在!
         return None
 
     @property
@@ -108,13 +115,15 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
         if self.coordinator.data and self._device_index < len(self.coordinator.data):
             device = self.coordinator.data[self._device_index]
 
+            # Add device-specific attributes from OppoCloudDevice
+            # Dont add last_seen attribute because is updates frequently
             attributes["device_model"] = device.device_model
             attributes["is_online"] = str(device.is_online)
-            
+
             # 将提取出来的中文文本作为参考地址存入属性
             if device.location_name:
                 attributes["oppo_address"] = device.location_name
-                
+
             # 将获取到的电量存入属性
             if device.battery_level is not None:
                 attributes["battery_level"] = f"{device.battery_level}%"
