@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
+import time
 
 from selenium import webdriver
 from selenium.common.exceptions import (
@@ -611,38 +612,46 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
         except TimeoutException:
             LOGGER.warning("Some devices are still updating, continuing anyway")
 
-        # Step 3: Wait for device item to have location info
+        # Step 3: Canvas rendering of battery requires clicking each device item
         try:
-            wait.until(
-                lambda d: (
-                    all(
-                        item.find_elements(By.CSS_SELECTOR, ".device-poi")
-                        or item.find_elements(
-                            By.CSS_SELECTOR,
-                            ".device-status-wrap:not(.positioning)",
-                        )
-                        for item in d.find_elements(
-                            By.CSS_SELECTOR,
-                            "#device-list .device-list ul > li",
-                        )
-                    )
-                    if d.find_elements(
-                        By.CSS_SELECTOR, "#device-list .device-list ul > li"
-                    )
-                    else True
+            device_items = wait.until(
+                expected_conditions.presence_of_all_elements_located(
+                    (By.CSS_SELECTOR, "#device-list .device-list ul > li")
                 )
             )
-        except TimeoutException:
-            LOGGER.warning("Not all device items settled, continuing anyway")
+            for item in device_items:
+                driver.execute_script("arguments[0].click();", item)
+                time.sleep(1.5)
+        except Exception as exception:
+            LOGGER.warning("Failed to click device item for details: %s", exception)
 
-        # Now read the fresh data from $findVm
+        # Now read the fresh data from $findVm + battery from DOM
         device_data = driver.execute_script(
             """
-            if (!window.$findVm || !window.$findVm.deviceList || !window.$findVm.points)
-                return null;
+            if (!window.$findVm || !window.$findVm.deviceList) return null;
+            var devices = JSON.parse(JSON.stringify(window.$findVm.deviceList));
+
+            var globalBattery = null;
+            var batteryEl = document.querySelector('.info-battery .count');
+            if (batteryEl) {
+                globalBattery = (batteryEl.innerText || batteryEl.textContent).replace('%', '').trim();
+            }
+
+            for (var i = 0; i < devices.length; i++) {
+                var localBatteryEl = null;
+                var liElems = document.querySelectorAll("#device-list .device-list ul > li");
+                if (liElems && liElems.length > i) {
+                    localBatteryEl = liElems[i].querySelector('.info-battery .count');
+                }
+                if (localBatteryEl) {
+                    devices[i]._domBattery = (localBatteryEl.innerText || localBatteryEl.textContent).replace('%', '').trim();
+                } else if (globalBattery) {
+                    devices[i]._domBattery = globalBattery;
+                }
+            }
             return {
-                deviceList: window.$findVm.deviceList,
-                points: window.$findVm.points
+                deviceList: devices,
+                points: window.$findVm.points || []
             };
             """
         )
@@ -655,7 +664,6 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             device_data["deviceList"], device_data.get("points", [])
         )
 
-        LOGGER.info("Found %d devices in OPPO Cloud", len(devices))
         return devices
 
     def _parse_device_data(
@@ -719,6 +727,15 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         exception,
                     )
 
+            battery_level_raw = device.get("_domBattery") or device.get("batteryLevel") or device.get("batteryPercent")
+
+            battery_level = None
+            if battery_level_raw is not None:
+                try:
+                    battery_level = int(str(battery_level_raw).replace("%", "").strip())
+                except (ValueError, TypeError):
+                    pass
+
             result.append(
                 OppoCloudDevice(
                     device_model=device_model,
@@ -727,6 +744,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                     longitude=longitude,
                     last_seen=last_seen,
                     is_online=is_online,
+                    battery_level=battery_level,
                 )
             )
 
