@@ -10,6 +10,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import (
     OppoCloudApiClientAuthenticationError,
     OppoCloudApiClientError,
+    OppoCloudApiClientSmsVerificationError,
 )
 
 if TYPE_CHECKING:
@@ -30,5 +31,7 @@ class OppoCloudDataUpdateCoordinator(DataUpdateCoordinator[list["OppoCloudDevice
             # Raising ConfigEntryAuthFailed will cancel future updates
             # and start a config flow with SOURCE_REAUTH (async_step_reauth)
             raise ConfigEntryAuthFailed from exception
+        except OppoCloudApiClientSmsVerificationError as exception:
+            raise UpdateFailed(exception) from exception
         except OppoCloudApiClientError as exception:
             raise UpdateFailed(exception) from exception

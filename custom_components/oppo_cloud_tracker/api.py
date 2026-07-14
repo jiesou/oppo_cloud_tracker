@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 
 from selenium import webdriver
 from selenium.common.exceptions import (
+    StaleElementReferenceException,
     TimeoutException,
     WebDriverException,
 )
@@ -49,6 +51,23 @@ class OppoCloudApiClientAuthenticationError(OppoCloudApiClientError):
     def __init__(self, context: str = "unexpected") -> None:
         """Initialize the OppoCloudApiClientAuthenticationError with a message."""
         super().__init__(f"when {context}")
+
+
+class OppoCloudApiClientSmsVerificationError(OppoCloudApiClientError):
+    """
+    Exception to indicate SMS verification is needed.
+
+    Raised when OPPO Cloud requires SMS verification during login.
+    The caller should prompt the user for a code and retry with sms_code=.
+    """
+
+    def __init__(self, masked_phone: str = "") -> None:
+        """Initialize SMS verification error with optional masked phone."""
+        self.masked_phone = masked_phone
+        msg = "SMS verification required"
+        if masked_phone:
+            msg += f" for {masked_phone}"
+        super().__init__(msg)
 
 
 class OppoCloudApiClient:
@@ -131,15 +150,41 @@ class OppoCloudApiClient:
             return
         await asyncio.get_running_loop().run_in_executor(None, self._cleanup_driver)
 
-    async def async_login_oppo_cloud(self) -> None:
+    async def async_verify_sms_continue(self, code: str) -> None:
+        """
+        Continue SMS verification on an existing session.
+
+        Assumes the driver is alive with identify iframe visible.
+        Switches directly to it, enters code and clicks Verify.
+        """
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._verify_sms_continue, code
+        )
+
+    def _verify_sms_continue(self, code: str) -> None:
+        driver = self._get_or_create_driver()
+        driver.switch_to.default_content()
+        login_iframe = driver.find_element(By.CSS_SELECTOR, "iframe")
+        driver.switch_to.frame(login_iframe)
+        verify_iframe = driver.find_element(
+            By.CSS_SELECTOR, "iframe[name^='identify-']"
+        )
+        driver.switch_to.frame(verify_iframe)
+        self._complete_sms_verification(driver, code)
+
+    async def async_login_oppo_cloud(
+        self, sms_code: str | None = None
+    ) -> None:
         """Log in to OPPO Cloud using Selenium."""
         try:
             await asyncio.get_running_loop().run_in_executor(
-                None, self._login_oppo_cloud
+                None, self._login_oppo_cloud, sms_code
             )
         except OppoCloudApiClientAuthenticationError:
             raise
         except OppoCloudApiClientCommunicationError:
+            raise
+        except OppoCloudApiClientSmsVerificationError:
             raise
         except TimeoutException as exception:
             msg = f"login - {exception}"
@@ -148,7 +193,63 @@ class OppoCloudApiClient:
             msg = f"Unexpected login - {exception}"
             raise OppoCloudApiClientError(msg) from exception
 
-    def _login_oppo_cloud(self) -> None:
+    def _complete_sms_verification(
+        self, driver: webdriver.Remote, code: str
+    ) -> None:
+        """
+        Enter SMS code and click Verify inside identify iframe.
+
+        Clicks "Get code" first (new SMS each session), enters code,
+        then clicks Verify and waits for iframe to disappear.
+        """
+        wait = WebDriverWait(driver, 10)
+
+        get_code_btn = wait.until(
+            expected_conditions.element_to_be_clickable(
+                (By.CSS_SELECTOR, ".uc-input-get-code-button")
+            )
+        )
+        get_code_btn.click()
+
+        code_input = wait.until(
+            expected_conditions.element_to_be_clickable(
+                (By.CSS_SELECTOR, "input[type='tel'][maxlength='6']")
+            )
+        )
+        code_input.send_keys(code)
+        driver.execute_script(
+            "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
+            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
+            "arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",
+            code_input,
+        )
+
+        verify_btn = wait.until(
+            lambda d: next(
+                (
+                    el
+                    for el in d.find_elements(
+                        By.CSS_SELECTOR, "._verifyButton"
+                    )
+                    if el.is_displayed()
+                    and el.get_attribute("aria-disabled") == "false"
+                ),
+                None,
+            )
+        )
+        verify_btn.click()
+
+        driver.switch_to.parent_frame()
+        WebDriverWait(driver, 10).until(
+            expected_conditions.invisibility_of_element_located(
+                (By.CSS_SELECTOR, "iframe[name^='identify-']")
+            )
+        )
+        LOGGER.info("OPPO Cloud SMS verification completed")
+
+    def _login_oppo_cloud(  # noqa: PLR0915
+        self, sms_code: str | None = None
+    ) -> None:
         """Log in to OPPO Cloud using Selenium (sync)."""
         driver = self._get_or_create_driver()
         wait = WebDriverWait(driver, 10)  # default timeout
@@ -217,61 +318,126 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             """
             driver.execute_script(observer_script)
 
-            # It uses custom <div role="button"> instead of native <button>,
-            # and "disabled" state is a CSS class "uc-button-disabled" not an attr.
-            # Wait for the visible Sign In button to lose its disabled class.
-            sign_in_btn = wait.until(
-                lambda d: next(
-                    (
-                        el
-                        for el in d.find_elements(By.CSS_SELECTOR, "[role='button']")
-                        if el.is_displayed()
-                        and "Sign in" in (el.text or "")
-                        and "uc-button-disabled"
-                        not in (el.get_attribute("class") or "")
-                    ),
-                    None,
-                )
-            )
-            sign_in_btn.click()  # pyright: ignore[reportOptionalMemberAccess]
-
-            # Handle "Agree and continue" if it pops up
-            with contextlib.suppress(TimeoutException):
-                agree_btn = WebDriverWait(driver, 5).until(
-                    lambda d: next(
-                        (
-                            el
-                            for el in d.find_elements(
-                                By.CSS_SELECTOR, "[role='button']"
-                            )
-                            if el.is_displayed()
-                            and "Agree and continue" in (el.text or "")
-                        ),
-                        None,
+            # Retry loop: a mandatory "Agree and continue" ToS dialog may
+            # appear on the first click; dismiss it then click Sign in again.
+            for _ in range(3):
+                # It uses custom <div role="button"> instead of native <button>,
+                # and "disabled" state is a CSS class "uc-button-disabled" not an attr.
+                # Wait for the visible Sign In button to lose its disabled class.
+                try:
+                    sign_in_btn = wait.until(
+                        lambda d: next(
+                            (
+                                el
+                                for el in d.find_elements(
+                                    By.CSS_SELECTOR, "[role='button']"
+                                )
+                                if el.is_displayed()
+                                and "Sign in" in (el.text or "")
+                                and "uc-button-disabled"
+                                not in (el.get_attribute("class") or "")
+                            ),
+                            None,
+                        )
                     )
-                )
-                agree_btn.click()  # pyright: ignore[reportOptionalMemberAccess]
-                LOGGER.info("Agreed to ToS")
+                    sign_in_btn.click()  # pyright: ignore[reportOptionalMemberAccess]
+                except StaleElementReferenceException:
+                    continue
 
-            # URL change: login success signal
-            # driver.current_url always returns main page URL even inside iframe
-            try:
-                wait.until(
-                    lambda d: not d.current_url.startswith(CONF_OPPO_CLOUD_LOGIN_URL)
+                # Handle "Agree and continue" ToS dialog if it pops up
+                try:
+                    agree_btn = WebDriverWait(driver, 5).until(
+                        lambda d: next(
+                            (
+                                el
+                                for el in d.find_elements(
+                                    By.CSS_SELECTOR,
+                                    ".uc-dialog-action-recommend, [role='button']",
+                                )
+                                if el.is_displayed()
+                                and (
+                                    "Agree and continue" in (el.text or "")
+                                    or "同意并继续" in (el.text or "")
+                                )
+                            ),
+                            None,
+                        )
+                    )
+                    driver.execute_script(
+                        "arguments[0].dispatchEvent("
+                        "new PointerEvent('click', {bubbles: true}))",
+                        agree_btn,
+                    )
+                    LOGGER.info("Agreed to ToS")
+                except TimeoutException:
+                    pass
+
+                # Check for SMS verification iframe inside login iframe
+                try:
+                    verify_iframe = WebDriverWait(driver, 3).until(
+                        expected_conditions.presence_of_element_located(
+                            (By.CSS_SELECTOR, "iframe[name^='identify-']")
+                        )
+                    )
+                except TimeoutException:
+                    verify_iframe = None
+
+                if verify_iframe is not None:
+                    driver.switch_to.frame(verify_iframe)
+
+                    if sms_code is None:
+                        get_code_btn = WebDriverWait(driver, 10).until(
+                            expected_conditions.element_to_be_clickable(
+                                (By.CSS_SELECTOR, ".uc-input-get-code-button")
+                            )
+                        )
+                        body_text = driver.find_element(
+                            By.TAG_NAME, "body"
+                        ).text
+                        LOGGER.info("SMS body text: %s", body_text[:200])
+                        match = re.search(
+                            r"\+86\s*\d+\**\d+", body_text
+                        )
+                        masked_phone = (
+                            match.group() if match else "unknown phone"
+                        )
+                        get_code_btn.click()
+                        LOGGER.info(
+                            "OPPO Cloud SMS code sent to %s", masked_phone
+                        )
+                        driver.switch_to.parent_frame()
+                        raise OppoCloudApiClientSmsVerificationError(
+                            masked_phone
+                        )
+
+                    self._complete_sms_verification(driver, sms_code)
+
+                # No ToS dialog — wait for login to complete
+                try:
+                    wait.until(
+                        lambda d: not d.current_url.startswith(
+                            CONF_OPPO_CLOUD_LOGIN_URL
+                        )
+                    )
+                    LOGGER.info("OPPO Cloud login successful")
+                    break
+                except TimeoutException:
+                    continue
+            else:
+                # All retries exhausted — collect captured errors
+                captured = driver.execute_script(
+                    "return window.__capturedErrors || []"
                 )
-                LOGGER.info("OPPO Cloud login successful")
-            except TimeoutException as exception:
-                # Collect captured errors from iframe MutationObserver
-                captured = driver.execute_script("return window.__capturedErrors || []")
-                # Clean whitespace and duplicates
                 clean_captured = []
                 for s in captured:
                     normalized = " ".join(s.split())
                     if normalized:
                         clean_captured.append(normalized)
                 captured_str = ", ".join(dict.fromkeys(clean_captured))
-                msg = f"login, looks like {captured_str}" if captured else "login"
-                raise OppoCloudApiClientAuthenticationError(msg) from exception
+                msg = (
+                    f"login, looks like {captured_str}" if captured else "login"
+                )
+                raise OppoCloudApiClientAuthenticationError(msg)
         finally:
             with contextlib.suppress(WebDriverException):
                 driver.switch_to.default_content()
@@ -485,7 +651,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
 
 # ruff: noqa: T201, I001, PLC0415
 # Debug/testing functionality when run as module
-async def _debug_main() -> None:
+async def _debug_main() -> None:  # noqa: PLR0915
     """Debug main function for testing Selenium client."""
     import os
     import sys
@@ -500,6 +666,7 @@ async def _debug_main() -> None:
     # Get configuration from environment variables or defaults
     username = os.getenv("OPPO_USERNAME")
     password = os.getenv("OPPO_PASSWORD")
+    sms_code = os.getenv("OPPO_SMS_CODE")
     remote_browser_url = os.getenv("REMOTE_BROWSER_URL", "http://localhost:4444/wd/hub")
 
     if username is None or password is None:
@@ -509,6 +676,9 @@ async def _debug_main() -> None:
         print("export OPPO_PASSWORD='your_password'")
         print("export REMOTE_BROWSER_URL='http://localhost:4444/wd/hub'  # Optional")
         sys.exit(1)
+
+    if sms_code:
+        print(f"   SMS Code: {sms_code}")
 
     print("🔧 Testing OPPO Cloud API Client")
     print(f"   Username: {username}")
@@ -526,7 +696,18 @@ async def _debug_main() -> None:
         print()
 
         if connection_ok:
-            # Test 2: Get device data
+            # Test 2: Login
+            print("    Logging in...")
+            try:
+                await client.async_login_oppo_cloud(sms_code=sms_code)
+                print("   ✅ Login successful")
+            except OppoCloudApiClientSmsVerificationError as e:
+                print(f"   📱 {e}")
+                print("   Set OPPO_SMS_CODE=<code> and re-run")
+                return
+
+            print()
+            # Test 3: Get device data
             print("    Getting device data...")
             start = loop.time()
             data = await client.async_get_data()
@@ -536,8 +717,7 @@ async def _debug_main() -> None:
                 print(f"     - {device}")
             print(f"    Fetch time: {elapsed:.3f}s")
             print()
-
-        print("✅ All tests completed successfully!")
+            print("✅ All tests completed successfully!")
 
     finally:
         print("\n🧹 Cleaning up...")
