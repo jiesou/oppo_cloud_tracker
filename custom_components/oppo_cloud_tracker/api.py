@@ -174,9 +174,7 @@ class OppoCloudApiClient:
             await self.async_cleanup()
             raise
 
-    async def async_login_oppo_cloud(
-        self, sms_code: str | None = None
-    ) -> None:
+    async def async_login_oppo_cloud(self, sms_code: str | None = None) -> None:
         """Log in to OPPO Cloud using Selenium."""
         try:
             await asyncio.get_running_loop().run_in_executor(
@@ -195,9 +193,7 @@ class OppoCloudApiClient:
             msg = f"Unexpected login - {exception}"
             raise OppoCloudApiClientError(msg) from exception
 
-    def _complete_sms_verification(
-        self, driver: webdriver.Remote, code: str
-    ) -> None:
+    def _complete_sms_verification(self, driver: webdriver.Remote, code: str) -> None:
         """
         Enter SMS code and click Verify inside identify iframe.
 
@@ -230,9 +226,7 @@ class OppoCloudApiClient:
             lambda d: next(
                 (
                     el
-                    for el in d.find_elements(
-                        By.CSS_SELECTOR, "._verifyButton"
-                    )
+                    for el in d.find_elements(By.CSS_SELECTOR, "._verifyButton")
                     if el.is_displayed()
                     and el.get_attribute("aria-disabled") == "false"
                 ),
@@ -284,21 +278,19 @@ class OppoCloudApiClient:
         verify_btn = next(
             (
                 el
-                for el in driver.find_elements(
-                    By.CSS_SELECTOR, "._verifyButton"
-                )
+                for el in driver.find_elements(By.CSS_SELECTOR, "._verifyButton")
                 if el.is_displayed()
             ),
             None,
         )
         aria_disabled = (
-            verify_btn.get_attribute("aria-disabled")
-            if verify_btn
-            else None
+            verify_btn.get_attribute("aria-disabled") if verify_btn else None
         )
         LOGGER.info(
             "SMS verify state — input='%s', aria_disabled=%s, body=%s",
-            input_val, aria_disabled, body_after[:150],
+            input_val,
+            aria_disabled,
+            body_after[:150],
         )
 
         if verify_btn is None or aria_disabled != "false":
@@ -403,6 +395,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             # - whichever element appears first gets handled.
             # Sign in is debounced after ToS to avoid re-triggering the dialog.
             import time as _time
+
             deadline = _time.monotonic() + 60
             _tos_agreed_at = 0.0  # debounce sign-in click after ToS
             _sign_in_debounce = 3.0  # seconds to wait after ToS before re-click
@@ -413,9 +406,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                 # Check for either the "Agree and continue" button or the
                 # dialog mask still blocking the page during transition.
                 tos_dialog_visible = False
-                for dialog_el in driver.find_elements(
-                    By.CSS_SELECTOR, ".uc-dialog"
-                ):
+                for dialog_el in driver.find_elements(By.CSS_SELECTOR, ".uc-dialog"):
                     try:
                         if dialog_el.is_displayed():
                             tos_dialog_visible = True
@@ -423,9 +414,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                     except StaleElementReferenceException:
                         continue
                 tos_btn = None
-                for el in driver.find_elements(
-                    By.CSS_SELECTOR, "[role='button']"
-                ):
+                for el in driver.find_elements(By.CSS_SELECTOR, "[role='button']"):
                     try:
                         if el.is_displayed() and "Agree and continue" in (
                             el.text or ""
@@ -458,9 +447,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                     else:
                         # Dialog visible but no agree button
                         # - could be a CAPTCHA / security verification overlay
-                        body_text = driver.find_element(
-                            By.TAG_NAME, "body"
-                        ).text[:500]
+                        body_text = driver.find_element(By.TAG_NAME, "body").text[:500]
                         if (
                             "Security verification" in body_text
                             or "security verification" in body_text
@@ -493,24 +480,14 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                                 (By.CSS_SELECTOR, ".uc-input-get-code-button")
                             )
                         )
-                        body_text = driver.find_element(
-                            By.TAG_NAME, "body"
-                        ).text
+                        body_text = driver.find_element(By.TAG_NAME, "body").text
                         LOGGER.info("SMS body text: %s", body_text[:200])
-                        match = re.search(
-                            r"\+86\s*\d+\**\d+", body_text
-                        )
-                        masked_phone = (
-                            match.group() if match else "unknown phone"
-                        )
+                        match = re.search(r"\+86\s*\d+\**\d+", body_text)
+                        masked_phone = match.group() if match else "unknown phone"
                         get_code_btn.click()
-                        LOGGER.info(
-                            "OPPO Cloud SMS code sent to %s", masked_phone
-                        )
+                        LOGGER.info("OPPO Cloud SMS code sent to %s", masked_phone)
                         driver.switch_to.parent_frame()
-                        raise OppoCloudApiClientSmsVerificationError(
-                            masked_phone
-                        )
+                        raise OppoCloudApiClientSmsVerificationError(masked_phone)
 
                     self._complete_sms_verification(driver, sms_code)
                     break
@@ -538,9 +515,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
 
                 # 4. Check URL - logged in?
                 try:
-                    if not driver.current_url.startswith(
-                        CONF_OPPO_CLOUD_LOGIN_URL
-                    ):
+                    if not driver.current_url.startswith(CONF_OPPO_CLOUD_LOGIN_URL):
                         LOGGER.info("OPPO Cloud login successful")
                         return
                 except WebDriverException:
@@ -548,35 +523,24 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
 
                 _time.sleep(1)
             else:
-                captured = driver.execute_script(
-                    "return window.__capturedErrors || []"
-                )
-                body = driver.find_element(
-                    By.TAG_NAME, "body"
-                ).text[:300]
+                captured = driver.execute_script("return window.__capturedErrors || []")
+                body = driver.find_element(By.TAG_NAME, "body").text[:300]
                 clean_captured = []
                 for s in captured:
                     normalized = " ".join(s.split())
                     if normalized:
                         clean_captured.append(normalized)
                 if "not secure" in body:
-                    clean_captured.append(
-                        "Device environment not secure"
-                    )
+                    clean_captured.append("Device environment not secure")
                 captured_str = ", ".join(dict.fromkeys(clean_captured))
-                msg = (
-                    f"login, looks like {captured_str}"
-                    if captured else "login"
-                )
+                msg = f"login, looks like {captured_str}" if captured else "login"
                 raise OppoCloudApiClientAuthenticationError(msg)
 
         finally:
             with contextlib.suppress(WebDriverException):
                 driver.switch_to.default_content()
 
-    async def async_auth(
-        self, sms_code: str | None = None
-    ) -> None:
+    async def async_auth(self, sms_code: str | None = None) -> None:
         """Authenticate — preserves session on SMS verification for retry."""
         try:
             await self.async_login_oppo_cloud(sms_code)
@@ -629,10 +593,12 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
         # Step 1: Wait for the loading overlay (div.device_location) to hide
         try:
             wait.until(
-                lambda d: d.find_element(
-                    By.CSS_SELECTOR, "div.device_location"
-                ).value_of_css_property("display")
-                == "none"
+                lambda d: (
+                    d.find_element(
+                        By.CSS_SELECTOR, "div.device_location"
+                    ).value_of_css_property("display")
+                    == "none"
+                )
             )
         except TimeoutException:
             LOGGER.warning("device_location overlay did not hide, continuing anyway")
