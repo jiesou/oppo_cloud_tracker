@@ -107,49 +107,48 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle SMS verification code entry."""
         errors: dict[str, str] = {}
         creds = getattr(self, "_user_data", {})
+        client = getattr(self, "_auth_client", None)
 
         if user_input and user_input.get("sms_code"):
-            try:
-                await self._test_credentials(
-                    username=creds.get(CONF_USERNAME, ""),
-                    password=creds.get(CONF_PASSWORD, ""),
-                    remote_browser_url=creds.get(
-                        CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL
-                    ),
-                    sms_code=user_input["sms_code"],
-                )
-            except OppoCloudApiClientAuthenticationError as exception:
-                LOGGER.warning(exception)
-                errors["base"] = "auth"
-            except OppoCloudApiClientSmsVerificationError as exception:
-                LOGGER.info("SMS verification retry: %s", exception.masked_phone)
-                errors["base"] = "sms_code"
-            except OppoCloudApiClientCommunicationError as exception:
-                LOGGER.error(exception)
-                errors["base"] = "connection"
-            except OppoCloudApiClientError as exception:
-                LOGGER.exception(exception)
+            if not client:
+                LOGGER.warning("SMS code submitted but no active auth session")
                 errors["base"] = "unknown"
             else:
-                if self.reauth_entry:
-                    return self.async_update_reload_and_abort(
-                        self.reauth_entry,
-                        data_updates={
-                            CONF_USERNAME: creds[CONF_USERNAME],
-                            CONF_PASSWORD: creds[CONF_PASSWORD],
-                            CONF_REMOTE_BROWSER_URL: creds.get(
-                                CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL
-                            ),
-                        },
+                try:
+                    await client.async_auth_sms_continue(user_input["sms_code"])
+                except OppoCloudApiClientAuthenticationError as exception:
+                    LOGGER.warning(exception)
+                    errors["base"] = "auth"
+                except OppoCloudApiClientSmsVerificationError as exception:
+                    LOGGER.info("SMS verification retry: %s", exception.masked_phone)
+                    errors["base"] = "sms_code"
+                except OppoCloudApiClientCommunicationError as exception:
+                    LOGGER.error(exception)
+                    errors["base"] = "connection"
+                except OppoCloudApiClientError as exception:
+                    LOGGER.exception(exception)
+                    errors["base"] = "unknown"
+                else:
+                    await client.async_cleanup()
+                    if self.reauth_entry:
+                        return self.async_update_reload_and_abort(
+                            self.reauth_entry,
+                            data_updates={
+                                CONF_USERNAME: creds[CONF_USERNAME],
+                                CONF_PASSWORD: creds[CONF_PASSWORD],
+                                CONF_REMOTE_BROWSER_URL: creds.get(
+                                    CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL
+                                ),
+                            },
+                        )
+                    await self.async_set_unique_id(
+                        unique_id=slugify(creds[CONF_USERNAME])
                     )
-                await self.async_set_unique_id(
-                    unique_id=slugify(creds[CONF_USERNAME])
-                )
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=f"OPPO Cloud - {creds[CONF_USERNAME]}",
-                    data=creds,
-                )
+                    self._abort_if_unique_id_configured()
+                    return self.async_create_entry(
+                        title=f"OPPO Cloud - {creds[CONF_USERNAME]}",
+                        data=creds,
+                    )
 
         return self.async_show_form(
             step_id="sms_code",
@@ -297,7 +296,6 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         username: str,
         password: str,
         remote_browser_url: str,
-        sms_code: str | None = None,
     ) -> None:
         """Validate credentials."""
         # Test Selenium Grid connection and basic functionality
@@ -308,8 +306,14 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         )
         # Test connection to Selenium Grid
         try:
-            await client.async_login_oppo_cloud(sms_code=sms_code)
-        finally:
+            await client.async_auth()
+        except OppoCloudApiClientSmsVerificationError:
+            self._auth_client = client
+            raise
+        except Exception:
+            await client.async_cleanup()
+            raise
+        else:
             await client.async_cleanup()
 
     @staticmethod

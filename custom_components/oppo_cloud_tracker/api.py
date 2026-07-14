@@ -111,7 +111,6 @@ class OppoCloudApiClient:
         url = self._remote_browser_url.strip()
         try:
             chrome_options = ChromeOptions()
-            chrome_options.add_argument("--headless=new")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--window-size=1920,1080")
@@ -165,27 +164,15 @@ class OppoCloudApiClient:
             return
         await asyncio.get_running_loop().run_in_executor(None, self._cleanup_driver)
 
-    async def async_verify_sms_continue(self, code: str) -> None:
-        """
-        Continue SMS verification on an existing session.
-
-        Assumes the driver is alive with identify iframe visible.
-        Switches directly to it, enters code and clicks Verify.
-        """
-        await asyncio.get_running_loop().run_in_executor(
-            None, self._verify_sms_continue, code
-        )
-
-    def _verify_sms_continue(self, code: str) -> None:
-        driver = self._get_or_create_driver()
-        driver.switch_to.default_content()
-        login_iframe = driver.find_element(By.CSS_SELECTOR, "iframe")
-        driver.switch_to.frame(login_iframe)
-        verify_iframe = driver.find_element(
-            By.CSS_SELECTOR, "iframe[name^='identify-']"
-        )
-        driver.switch_to.frame(verify_iframe)
-        self._complete_sms_verification(driver, code)
+    async def async_auth_sms_continue(self, code: str) -> None:
+        """Continue SMS auth on preserved session — enters code, no Get code re-click."""
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._enter_sms_code, code
+            )
+        except Exception:
+            await self.async_cleanup()
+            raise
 
     async def async_login_oppo_cloud(
         self, sms_code: str | None = None
@@ -260,6 +247,85 @@ class OppoCloudApiClient:
                 (By.CSS_SELECTOR, "iframe[name^='identify-']")
             )
         )
+        LOGGER.info("OPPO Cloud SMS verification completed")
+
+    def _enter_sms_code(self, code: str) -> None:
+        """Enter SMS code and click Verify on preserved session — no Get code re-click."""
+        driver = self._get_or_create_driver()
+        driver.switch_to.default_content()
+        login_iframe = driver.find_element(By.CSS_SELECTOR, "iframe")
+        driver.switch_to.frame(login_iframe)
+        verify_iframe = driver.find_element(
+            By.CSS_SELECTOR, "iframe[name^='identify-']"
+        )
+        driver.switch_to.frame(verify_iframe)
+
+        wait = WebDriverWait(driver, 10)
+
+        body_text = driver.find_element(By.TAG_NAME, "body").text[:500]
+        LOGGER.info("SMS iframe body: %s", body_text)
+
+        code_input = wait.until(
+            expected_conditions.element_to_be_clickable(
+                (By.CSS_SELECTOR, "input[type='tel'][maxlength='6']")
+            )
+        )
+        code_input.clear()
+        code_input.send_keys(code)
+        driver.execute_script(
+            "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
+            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
+            "arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",
+            code_input,
+        )
+
+        input_val = code_input.get_attribute("value") or ""
+        body_after = driver.find_element(By.TAG_NAME, "body").text[:500]
+        verify_btn = next(
+            (
+                el
+                for el in driver.find_elements(
+                    By.CSS_SELECTOR, "._verifyButton"
+                )
+                if el.is_displayed()
+            ),
+            None,
+        )
+        aria_disabled = (
+            verify_btn.get_attribute("aria-disabled")
+            if verify_btn
+            else None
+        )
+        LOGGER.info(
+            "SMS verify state — input='%s', aria_disabled=%s, body=%s",
+            input_val, aria_disabled, body_after[:150],
+        )
+
+        if verify_btn is None or aria_disabled != "false":
+            msg = (
+                f"SMS Verify not ready — btn_found={verify_btn is not None}, "
+                f"aria_disabled={aria_disabled}. Body: {body_after[:200]}"
+            )
+            raise OppoCloudApiClientAuthenticationError(msg)
+
+        verify_btn.click()
+
+        driver.switch_to.parent_frame()
+        WebDriverWait(driver, 10).until(
+            expected_conditions.invisibility_of_element_located(
+                (By.CSS_SELECTOR, "iframe[name^='identify-']")
+            )
+        )
+
+        driver.switch_to.default_content()
+        try:
+            WebDriverWait(driver, 10).until(
+                expected_conditions.invisibility_of_element_located(
+                    (By.CSS_SELECTOR, "iframe")
+                )
+            )
+        except TimeoutException:
+            LOGGER.warning("Login iframe still visible after SMS verification")
         LOGGER.info("OPPO Cloud SMS verification completed")
 
     def _login_oppo_cloud(  # noqa: PLR0915
@@ -346,31 +412,37 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                 # 1. Handle ToS dialog if visible
                 # Check for either the "Agree and continue" button or the
                 # dialog mask still blocking the page during transition.
-                tos_dialog_visible = any(
-                    el.is_displayed()
-                    for el in driver.find_elements(
-                        By.CSS_SELECTOR, ".uc-dialog"
-                    )
-                )
-                tos_btn = next(
-                    (
-                        el
-                        for el in driver.find_elements(
-                            By.CSS_SELECTOR, "[role='button']"
-                        )
-                        if el.is_displayed()
-                        and "Agree and continue" in (el.text or "")
-                    ),
-                    None,
-                )
+                tos_dialog_visible = False
+                for dialog_el in driver.find_elements(
+                    By.CSS_SELECTOR, ".uc-dialog"
+                ):
+                    try:
+                        if dialog_el.is_displayed():
+                            tos_dialog_visible = True
+                            break
+                    except StaleElementReferenceException:
+                        continue
+                tos_btn = None
+                for el in driver.find_elements(
+                    By.CSS_SELECTOR, "[role='button']"
+                ):
+                    try:
+                        if el.is_displayed() and "Agree and continue" in (el.text or ""):
+                            tos_btn = el
+                            break
+                    except StaleElementReferenceException:
+                        continue
                 if tos_btn is not None or tos_dialog_visible:
                     if tos_btn is not None:
-                        driver.execute_script(
-                            "arguments[0].focus();arguments[0].click();"
-                            "arguments[0].dispatchEvent("
-                            "new MouseEvent('click',{bubbles:true,cancelable:true,view:window}))",
-                            tos_btn,
-                        )
+                        try:
+                            driver.execute_script(
+                                "arguments[0].focus();arguments[0].click();"
+                                "arguments[0].dispatchEvent("
+                                "new MouseEvent('click',{bubbles:true,cancelable:true,view:window}))",
+                                tos_btn,
+                            )
+                        except StaleElementReferenceException:
+                            continue
                         LOGGER.info("Agreed to ToS")
                         _tos_agreed_at = now
                         # Wait for dialog to disappear
@@ -500,6 +572,18 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
         finally:
             with contextlib.suppress(WebDriverException):
                 driver.switch_to.default_content()
+
+    async def async_auth(
+        self, sms_code: str | None = None
+    ) -> None:
+        """Authenticate — preserves session on SMS verification for retry."""
+        try:
+            await self.async_login_oppo_cloud(sms_code)
+        except OppoCloudApiClientSmsVerificationError:
+            raise
+        except Exception:
+            await self.async_cleanup()
+            raise
 
     async def async_get_data(self) -> list[OppoCloudDevice]:
         """Get device location data from OPPO Cloud."""
