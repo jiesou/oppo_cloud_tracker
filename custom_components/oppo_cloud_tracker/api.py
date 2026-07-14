@@ -352,12 +352,13 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                     )
                 )
                 driver.execute_script(
+                    "arguments[0].focus();arguments[0].click();"
                     "arguments[0].dispatchEvent("
-                    "new PointerEvent('click', {bubbles: true}))",
+                    "new MouseEvent('click',{bubbles:true,cancelable:true,view:window}))",
                     agree_btn,
                 )
                 LOGGER.info("Agreed to ToS")
-                # Wait for dialog to disappear, then login proceeds
+                # Wait for dialog to disappear
                 try:
                     WebDriverWait(driver, 5).until(
                         expected_conditions.invisibility_of_element_located(
@@ -367,10 +368,50 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                 except TimeoutException:
                     pass
 
-            # URL change: login success signal (longer wait for SMS)
+            # Check for SMS verification iframe inside login iframe
+            try:
+                verify_iframe = WebDriverWait(driver, 5).until(
+                    expected_conditions.presence_of_element_located(
+                        (By.CSS_SELECTOR, "iframe[name^='identify-']")
+                    )
+                )
+            except TimeoutException:
+                verify_iframe = None
+
+            if verify_iframe is not None:
+                driver.switch_to.frame(verify_iframe)
+
+                if sms_code is None:
+                    get_code_btn = WebDriverWait(driver, 10).until(
+                        expected_conditions.element_to_be_clickable(
+                            (By.CSS_SELECTOR, ".uc-input-get-code-button")
+                        )
+                    )
+                    body_text = driver.find_element(
+                        By.TAG_NAME, "body"
+                    ).text
+                    LOGGER.info("SMS body text: %s", body_text[:200])
+                    match = re.search(
+                        r"\+86\s*\d+\**\d+", body_text
+                    )
+                    masked_phone = (
+                        match.group() if match else "unknown phone"
+                    )
+                    get_code_btn.click()
+                    LOGGER.info(
+                        "OPPO Cloud SMS code sent to %s", masked_phone
+                    )
+                    driver.switch_to.parent_frame()
+                    raise OppoCloudApiClientSmsVerificationError(
+                        masked_phone
+                    )
+
+                self._complete_sms_verification(driver, sms_code)
+
+            # URL change: login success signal
             # driver.current_url always returns main page URL even inside iframe
             try:
-                wait_longer = WebDriverWait(driver, 30)
+                wait_longer = WebDriverWait(driver, 60)
                 wait_longer.until(
                     lambda d: not d.current_url.startswith(CONF_OPPO_CLOUD_LOGIN_URL)
                 )
@@ -378,12 +419,15 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             except TimeoutException as exception:
                 # Collect captured errors from iframe MutationObserver
                 captured = driver.execute_script("return window.__capturedErrors || []")
+                body = driver.find_element(By.TAG_NAME, "body").text[:300]
                 # Clean whitespace and duplicates
                 clean_captured = []
                 for s in captured:
                     normalized = " ".join(s.split())
                     if normalized:
                         clean_captured.append(normalized)
+                if "not secure" in body:
+                    clean_captured.append("Device environment not secure")
                 captured_str = ", ".join(dict.fromkeys(clean_captured))
                 msg = f"login, looks like {captured_str}" if captured else "login"
                 raise OppoCloudApiClientAuthenticationError(msg) from exception
