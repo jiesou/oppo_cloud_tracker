@@ -165,7 +165,7 @@ class OppoCloudApiClient:
         await asyncio.get_running_loop().run_in_executor(None, self._cleanup_driver)
 
     async def async_auth_sms_continue(self, code: str) -> None:
-        """Continue SMS auth on preserved session — enters code, no Get code re-click."""
+        """Continue SMS auth on preserved session."""
         try:
             await asyncio.get_running_loop().run_in_executor(
                 None, self._enter_sms_code, code
@@ -250,7 +250,7 @@ class OppoCloudApiClient:
         LOGGER.info("OPPO Cloud SMS verification completed")
 
     def _enter_sms_code(self, code: str) -> None:
-        """Enter SMS code and click Verify on preserved session — no Get code re-click."""
+        """Enter SMS code and click Verify on preserved session."""
         driver = self._get_or_create_driver()
         driver.switch_to.default_content()
         login_iframe = driver.find_element(By.CSS_SELECTOR, "iframe")
@@ -328,7 +328,7 @@ class OppoCloudApiClient:
             LOGGER.warning("Login iframe still visible after SMS verification")
         LOGGER.info("OPPO Cloud SMS verification completed")
 
-    def _login_oppo_cloud(  # noqa: PLR0915
+    def _login_oppo_cloud(  # noqa: PLR0915, PLR0912
         self, sms_code: str | None = None
     ) -> None:
         """Log in to OPPO Cloud using Selenium (sync)."""
@@ -400,7 +400,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
             driver.execute_script(observer_script)
 
             # Unified loop: handle ToS, Sign in, SMS, URL change
-            # – whichever element appears first gets handled.
+            # - whichever element appears first gets handled.
             # Sign in is debounced after ToS to avoid re-triggering the dialog.
             import time as _time
             deadline = _time.monotonic() + 60
@@ -427,7 +427,9 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                     By.CSS_SELECTOR, "[role='button']"
                 ):
                     try:
-                        if el.is_displayed() and "Agree and continue" in (el.text or ""):
+                        if el.is_displayed() and "Agree and continue" in (
+                            el.text or ""
+                        ):
                             tos_btn = el
                             break
                     except StaleElementReferenceException:
@@ -438,7 +440,8 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                             driver.execute_script(
                                 "arguments[0].focus();arguments[0].click();"
                                 "arguments[0].dispatchEvent("
-                                "new MouseEvent('click',{bubbles:true,cancelable:true,view:window}))",
+                                "new MouseEvent('click',"
+                                "{bubbles:true,cancelable:true,view:window}))",
                                 tos_btn,
                             )
                         except StaleElementReferenceException:
@@ -446,17 +449,15 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         LOGGER.info("Agreed to ToS")
                         _tos_agreed_at = now
                         # Wait for dialog to disappear
-                        try:
+                        with contextlib.suppress(TimeoutException):
                             WebDriverWait(driver, 5).until(
                                 expected_conditions.invisibility_of_element_located(
                                     (By.CSS_SELECTOR, ".uc-dialog")
                                 )
                             )
-                        except TimeoutException:
-                            pass
                     else:
                         # Dialog visible but no agree button
-                        # – could be a CAPTCHA / security verification overlay
+                        # - could be a CAPTCHA / security verification overlay
                         body_text = driver.find_element(
                             By.TAG_NAME, "body"
                         ).text[:500]
@@ -535,7 +536,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         _time.sleep(1)
                         continue
 
-                # 4. Check URL – logged in?
+                # 4. Check URL - logged in?
                 try:
                     if not driver.current_url.startswith(
                         CONF_OPPO_CLOUD_LOGIN_URL
