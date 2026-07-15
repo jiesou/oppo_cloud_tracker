@@ -30,8 +30,9 @@ class OppoCloudDevice:
     """Data for the OPPO Cloud devices."""
 
     device_model: str
-    location_name: str
+    location_name: str | None
     latitude: float | None
     longitude: float | None
     last_seen: str | None
     is_online: bool
+    battery_level: int | None = None

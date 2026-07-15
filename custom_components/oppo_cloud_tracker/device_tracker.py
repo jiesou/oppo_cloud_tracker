@@ -75,15 +75,12 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
     @property
     def source_type(self) -> SourceType:
         """Return the source type of the device."""
-        # Since we only have location names, not GPS coordinates
         return SourceType.GPS
 
     @property
     def location_name(self) -> str | None:
         """Return the location name where the device was last seen."""
-        if self.coordinator.data and self._device_index < len(self.coordinator.data):
-            device = self.coordinator.data[self._device_index]
-            return device.location_name
+        # 强制返回 None。这是启动 HA 纯 GPS 经纬度判定的核心所在!
         return None
 
     @property
@@ -122,5 +119,13 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
             # Dont add last_seen attribute because is updates frequently
             attributes["device_model"] = device.device_model
             attributes["is_online"] = str(device.is_online)
+
+            # 将提取出来的中文文本作为参考地址存入属性
+            if device.location_name:
+                attributes["oppo_address"] = device.location_name
+
+            # 将获取到的电量存入属性
+            if device.battery_level is not None:
+                attributes["battery_level"] = f"{device.battery_level}%"
 
         return attributes
