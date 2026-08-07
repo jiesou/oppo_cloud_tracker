@@ -78,12 +78,6 @@ class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
         return SourceType.GPS
 
     @property
-    def location_name(self) -> str | None:
-        """Return the location name where the device was last seen."""
-        # 强制返回 None。这是启动 HA 纯 GPS 经纬度判定的核心所在!
-        return None
-
-    @property
     def latitude(self) -> float | None:
         """Return WGS latitude value of the device."""
         if self.coordinator.data and self._device_index < len(self.coordinator.data):
