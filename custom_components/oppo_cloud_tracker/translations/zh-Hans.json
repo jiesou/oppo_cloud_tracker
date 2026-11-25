@@ -10,6 +10,20 @@
                     "password": "OPPO 密码"
                 }
             },
+            "sms_code": {
+                "title": "短信验证",
+                "description": "OPPO Cloud 已向 {masked_phone} 发送验证码，请输入短信中的 6 位验证码。",
+                "data": {
+                    "sms_code": "短信验证码"
+                }
+            },
+            "manual_verify": {
+                "title": "需要完成安全验证",
+                "description": "OPPO Cloud 要求完成 {verification_type} 类型的图形验证（如拖动滑块）。请打开浏览器画面 {novnc_url}，**人工**完成验证后点击提交。集成不会自动破解验证；验证通过的会话会被保存复用。",
+                "data": {
+                    "confirm": "我已在浏览器画面中完成验证"
+                }
+            },
             "reauth_confirm": {
                 "title": "重新认证 OPPO Cloud Tracker",
                 "description": "您的 OPPO 凭据已过期或无效。请为账号 {username} 输入更新的凭据",
@@ -24,6 +38,8 @@
             "auth": "OPPO 登录失败 {error_detail}",
             "connection": "无法连接到浏览器后端 {error_detail}",
             "unknown": "发生未知错误 {error_detail}",
+            "sms_code": "短信验证码不正确或已过期，请重试。",
+            "verification_pending": "验证尚未完成，请在浏览器画面中拖动滑块/完成图形验证后再提交。",
             "wrong_account": "用户名与现有账号不匹配。请使用相同账号或删除后重新添加集成。"
         },
         "abort": {
@@ -58,6 +74,10 @@
         "locate": {
             "name": "定位设备",
             "description": "立即触发从 OPPO Cloud 更新设备位置。"
+        },
+        "resume_verification": {
+            "name": "手动验证后继续",
+            "description": "在 Selenium 浏览器画面（noVNC）中完成滑块/图形验证后调用，立即轮询已保留的会话并继续登录，无需等待下次扫描。"
         }
     }
 }

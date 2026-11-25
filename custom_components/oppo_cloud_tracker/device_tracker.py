@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.device_tracker import TrackerEntity
 from homeassistant.components.device_tracker.const import SourceType
+from homeassistant.core import callback
 
 from .const import DOMAIN, LOGGER
 from .entity import OppoCloudEntity
@@ -24,33 +25,53 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the device tracker platform."""
+    """Set up the device tracker platform.
+
+    Entity creation must not depend on data being present at setup time:
+    the first fetch may fail (login in progress, manual verification
+    pending) and return no devices. Entities are then added as soon as the
+    coordinator delivers data — otherwise the registry entries registered
+    earlier would stay orphaned ("entity no longer provided").
+    """
     coordinator = entry.runtime_data.coordinator
+    known_ids: set[str] = set()
 
-    # Wait for initial data to be loaded
-    if not coordinator.data:
+    @callback
+    def _add_entities_from_data() -> None:
+        """Create tracker entities for any device not added yet."""
+        if not coordinator.data:
+            return
+        new_entities = []
+        for idx, device in enumerate(coordinator.data):
+            # Keep the unique_id scheme stable so existing registry entries
+            # (entity_id, user name/aliases, area, labels) are reused.
+            unique_id = f"{DOMAIN}_{device.device_model}_{idx}_tracker"
+            if unique_id in known_ids:
+                continue
+            known_ids.add(unique_id)
+            new_entities.append(
+                OppoCloudDeviceTracker(
+                    coordinator=coordinator,
+                    device_index=idx,
+                    device=device,
+                )
+            )
+        if new_entities:
+            LOGGER.info(
+                "Adding %d device tracker entities (total %d devices)",
+                len(new_entities),
+                len(coordinator.data),
+            )
+            async_add_entities(new_entities)
+
+    # Add whatever is available now; subscribe for late-arriving data.
+    _add_entities_from_data()
+    if not known_ids:
         LOGGER.warning(
-            "No device data available yet, will add entities when data "
-            "becomes available"
+            "No device data at setup yet — entities will be created "
+            "automatically when the first successful update arrives"
         )
-        return
-
-    # Create device tracker entities for each device found
-    # coordinator.data is now list[OppoCloudDevice] directly
-    devices = coordinator.data
-    entities = [
-        OppoCloudDeviceTracker(
-            coordinator=coordinator,
-            device_index=idx,
-            device=device,
-        )
-        for idx, device in enumerate(devices)
-    ]
-
-    if entities:
-        async_add_entities(entities)
-    else:
-        LOGGER.warning("No devices found in coordinator data")
+    entry.async_on_unload(coordinator.async_add_listener(_add_entities_from_data))
 
 
 class OppoCloudDeviceTracker(OppoCloudEntity, TrackerEntity):
