@@ -10,6 +10,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import (
     OppoCloudApiClientAuthenticationError,
     OppoCloudApiClientError,
+    OppoCloudApiClientVerificationRequiredError,
 )
 
 if TYPE_CHECKING:
@@ -26,6 +27,12 @@ class OppoCloudDataUpdateCoordinator(DataUpdateCoordinator[list["OppoCloudDevice
         """Update data via library."""
         try:
             return await self.config_entry.runtime_data.client.async_get_data()
+        except OppoCloudApiClientVerificationRequiredError as exception:
+            # Manual slider/graphic verification is pending. Credentials are
+            # fine — do NOT trigger reauth. Surface a clear error state and
+            # retry on the next scheduled update (the browser session is kept
+            # alive so the user can complete the drag via noVNC meanwhile).
+            raise UpdateFailed(exception) from exception
         except OppoCloudApiClientAuthenticationError as exception:
             # Raising ConfigEntryAuthFailed will cancel future updates
             # and start a config flow with SOURCE_REAUTH (async_step_reauth)

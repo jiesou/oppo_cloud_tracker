@@ -1,3 +1,10 @@
 locate:
   name: Locate devices
   description: Trigger an immediate update of device locations from OPPO Cloud.
+
+resume_verification:
+  name: Resume after manual verification
+  description: >-
+    After completing the slider/graphic security verification in the Selenium
+    Grid browser view (noVNC), call this to poll the preserved session and
+    continue the login immediately instead of waiting for the next scan.

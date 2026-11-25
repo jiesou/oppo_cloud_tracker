@@ -21,7 +21,14 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.loader import async_get_loaded_integration
 
 from .api import OppoCloudApiClient
-from .const import CONF_REMOTE_BROWSER_URL, DOMAIN, LOGGER, SERVICE_LOCATE
+from .const import (
+    CONF_REMOTE_BROWSER_URL,
+    DOMAIN,
+    LOGGER,
+    SERVICE_LOCATE,
+    SERVICE_RESUME_VERIFICATION,
+    session_store_path,
+)
 from .coordinator import OppoCloudDataUpdateCoordinator
 from .data import OppoCloudData
 
@@ -60,6 +67,13 @@ async def async_setup_entry(
             username=entry.data[CONF_USERNAME],
             password=entry.data[CONF_PASSWORD],
             remote_browser_url=entry.data[CONF_REMOTE_BROWSER_URL],
+            # Persist verified session cookies under the HA config dir so a
+            # completed login (incl. manual slider verification) is REUSED
+            # on later polls / restarts instead of re-triggering the CAPTCHA.
+            # Path is keyed by account hash and shared with config_flow.
+            session_store_path=session_store_path(
+                hass.config.path(), entry.data[CONF_USERNAME]
+            ),
         ),
         integration=async_get_loaded_integration(hass, entry.domain),
         coordinator=coordinator,
@@ -89,6 +103,28 @@ async def async_setup_entry(
         schema=vol.Schema({}),
     )
 
+    # Register the resume_verification service: after the user completes the
+    # slider/graphic challenge in the Selenium Grid noVNC view, this polls the
+    # preserved session and continues login without waiting for the next scan.
+    async def async_resume_verification_service(_: ServiceCall) -> None:
+        """Resume login after a manual security verification was completed."""
+        client = entry.runtime_data.client
+        LOGGER.info("Resume verification service called — polling browser session")
+        try:
+            await client.async_wait_for_manual_verification()
+            await coordinator.async_refresh()
+        except Exception as err:
+            LOGGER.error("Resume verification failed: %s", err)
+            error_msg = f"Resume verification failed: {err}"
+            raise ServiceValidationError(error_msg) from err
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESUME_VERIFICATION,
+        async_resume_verification_service,
+        schema=vol.Schema({}),
+    )
+
     return True
 
 
@@ -103,6 +139,7 @@ async def async_unload_entry(
 
     # Remove the locate service
     hass.services.async_remove(DOMAIN, SERVICE_LOCATE)
+    hass.services.async_remove(DOMAIN, SERVICE_RESUME_VERIFICATION)
 
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 

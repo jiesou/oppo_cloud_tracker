@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import os
 import re
 import time
 
 from selenium import webdriver
 from selenium.common.exceptions import (
-    StaleElementReferenceException,
     TimeoutException,
     WebDriverException,
 )
@@ -23,7 +24,12 @@ from selenium.webdriver.remote.client_config import ClientConfig
 from custom_components.oppo_cloud_tracker.const import (
     CONF_OPPO_CLOUD_FIND_URL,
     CONF_OPPO_CLOUD_LOGIN_URL,
+    LOGIN_RETRY_ATTEMPTS,
+    LOGIN_RETRY_BACKOFF,
     LOGGER,
+    MANUAL_VERIFY_TIMEOUT,
+    SESSION_MAX_AGE,
+    VERIFICATION_POLL_INTERVAL,
 )
 from custom_components.oppo_cloud_tracker.data import OppoCloudDevice
 
@@ -71,6 +77,111 @@ class OppoCloudApiClientSmsVerificationError(OppoCloudApiClientError):
         super().__init__(msg)
 
 
+class OppoCloudApiClientVerificationRequiredError(OppoCloudApiClientError):
+    """
+    Exception for an interactive graphic security verification (e.g. slider).
+
+    The HeyTap login may present a drag-slider / puzzle CAPTCHA that only a
+    human can complete. This is NOT auto-solved. The browser session is kept
+    alive so the user can finish the drag manually through the Selenium Grid
+    noVNC view (see ``novnc_url``), then the client resumes automatically.
+
+    Carries enough context for a clear error state:
+      - verification_type: "slider" / "security" / ...
+      - evidence: detection hits (DOM selector / text keyword), for logs
+      - novnc_url: where a human can complete the verification
+      - screenshot_path: last captured page screenshot (may be None)
+    """
+
+    def __init__(
+        self,
+        verification_type: str = "security",
+        *,
+        evidence: list[str] | None = None,
+        novnc_url: str = "",
+        screenshot_path: str | None = None,
+        detail: str = "",
+    ) -> None:
+        """Initialize the verification-required error with context."""
+        self.verification_type = verification_type
+        self.evidence = evidence or []
+        self.novnc_url = novnc_url
+        self.screenshot_path = screenshot_path
+        msg = f"login, {verification_type} verification required (manual step)"
+        if detail:
+            msg += f": {detail}"
+        if novnc_url:
+            msg += f" — complete it in {novnc_url}"
+        super().__init__(msg)
+
+
+def _element_probe(el) -> tuple[bool, str, str]:
+    """Return (is_displayed, text, class) for a found element, safely.
+
+    The OPPO login page (Vue) re-renders aggressively: an element returned
+    by find_elements() may already be detached by the time it is inspected.
+    ChromeDriver reports that as NoSuchElementException ("no such element:
+    element not found") or "Node with given id does not belong to the
+    document" — not only as StaleElementReferenceException — so swallow
+    any WebDriverException and treat the element as gone.
+    """
+    try:
+        return el.is_displayed(), el.text or "", el.get_attribute("class") or ""
+    except WebDriverException:
+        return False, "", ""
+
+
+def _body_text(driver: webdriver.Remote, limit: int = 500) -> str:
+    """Read <body> innerText, tolerating documents that are mid-navigation."""
+    try:
+        return driver.find_element(By.TAG_NAME, "body").text[:limit]
+    except WebDriverException:
+        return ""
+
+
+def _detect_verification(driver: webdriver.Remote) -> tuple[str, list[str]] | None:
+    """Detect an interactive security-verification widget on the page.
+
+    Scans the CURRENT frame (call it after switching into the right iframe)
+    for slider/graphic-captcha fingerprints: known DOM selectors of common
+    behavior-captcha widgets and the text the HeyTap verify dialog shows.
+
+    Returns (verification_type, evidence) or None. Detection only — this
+    never attempts to solve the challenge; the caller hands it to a human.
+    """
+    from .const import (
+        VERIFY_DOM_SELECTORS,
+        VERIFY_TEXT_SECURITY,
+        VERIFY_TEXT_SLIDER,
+    )
+
+    evidence: list[str] = []
+
+    for selector in VERIFY_DOM_SELECTORS:
+        try:
+            els = driver.find_elements(By.CSS_SELECTOR, selector)
+        except WebDriverException:
+            continue
+        if any(_element_probe(el)[0] for el in els):
+            evidence.append(f"dom:{selector}")
+
+    body = _body_text(driver, 1200)
+    body_lower = body.lower()
+    slider_hits = [kw for kw in VERIFY_TEXT_SLIDER if kw.lower() in body_lower]
+    security_hits = [kw for kw in VERIFY_TEXT_SECURITY if kw.lower() in body_lower]
+    if slider_hits:
+        evidence.append(f"text-slider:{','.join(slider_hits[:5])}")
+    if security_hits:
+        evidence.append(f"text-security:{','.join(security_hits[:5])}")
+
+    if not evidence:
+        return None
+    # Slider keywords or slider DOM => drag verification; else generic security.
+    if slider_hits or any(e.startswith("dom:") for e in evidence):
+        return "slider", evidence
+    return "security", evidence
+
+
 class OppoCloudApiClient:
     """OPPO Cloud (HeyTap) API Client using Selenium."""
 
@@ -79,13 +190,330 @@ class OppoCloudApiClient:
         username: str,
         password: str,
         remote_browser_url: str,
+        session_store_path: str | None = None,
+        novnc_url: str | None = None,
     ) -> None:
-        """Initialize OPPO Cloud API Client."""
+        """Initialize OPPO Cloud API Client.
+
+        session_store_path: optional JSON file used to persist browser
+            cookies so a verified login session can be REUSED across
+            restarts instead of re-triggering the security verification.
+        novnc_url: optional URL of the Selenium Grid noVNC view, shown in
+            error/log messages so a human can open it and complete the
+            interactive verification manually.
+        """
         self._username = username
         self._password = password
         self._remote_browser_url = remote_browser_url
+        self._session_store_path = session_store_path
+        self._novnc_url = novnc_url or self._derive_novnc_url(remote_browser_url)
         self._driver: webdriver.Remote | None = None
         self._keep_session = False
+        self._verification_pending = False
+        self._verification_deadline = 0.0
+
+    @staticmethod
+    def _derive_novnc_url(remote_browser_url: str) -> str:
+        """Best-effort noVNC URL from a Selenium Grid URL (host:7900 convention)."""
+        import re as _re
+
+        match = _re.search(r"^(https?://[^/:]+)(?::(\d+))?", remote_browser_url.strip())
+        if not match:
+            return ""
+        host = match.group(1)
+        return f"{host}:7900"
+
+    def _load_persisted_cookies(self) -> list[dict]:
+        """Load cookies saved from a previous verified session, if any."""
+        if not self._session_store_path or not os.path.isfile(self._session_store_path):
+            return []
+        try:
+            with open(self._session_store_path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            cookies = data.get("cookies", [])
+            saved_at = data.get("saved_at", 0)
+            if time.time() - saved_at > SESSION_MAX_AGE:
+                LOGGER.info("Persisted OPPO session is older than %ds, ignoring", SESSION_MAX_AGE)
+                return []
+            LOGGER.info("Loaded %d persisted session cookies", len(cookies))
+            return cookies
+        except (OSError, ValueError) as exception:
+            LOGGER.warning("Failed to read session store: %s", exception)
+            return []
+
+    def _persist_cookies(self, driver: webdriver.Remote) -> None:
+        """Save ALL browser cookies (cross-domain) for session reuse.
+
+        Plain ``get_cookies()`` only returns cookies of the current page's
+        domain — the id.oppo.com SSO cookies would be lost, and a restored
+        session would silently fail later. CDP ``Network.getAllCookies``
+        captures every cookie in the jar instead.
+        """
+        if not self._session_store_path:
+            return
+        try:
+            try:
+                payload = driver.execute_cdp_cmd("Network.getAllCookies", {})
+                cookies = payload.get("cookies", [])
+            except WebDriverException:
+                cookies = driver.get_cookies()
+            os.makedirs(os.path.dirname(self._session_store_path) or ".", exist_ok=True)
+            with open(self._session_store_path, "w", encoding="utf-8") as handle:
+                json.dump({"saved_at": time.time(), "cookies": cookies}, handle)
+            domains = sorted({c.get("domain", "?") for c in cookies})
+            LOGGER.info(
+                "Persisted %d session cookies (domains: %s)", len(cookies), domains
+            )
+        except (OSError, WebDriverException) as exception:
+            LOGGER.warning("Failed to persist session cookies: %s", exception)
+
+    def _capture_screenshot(self, driver: webdriver.Remote, tag: str) -> str | None:
+        """Save a PNG screenshot for diagnostics; return its path or None."""
+        if not self._session_store_path:
+            return None
+        try:
+            directory = os.path.dirname(self._session_store_path) or "."
+            path = os.path.join(directory, f"{tag}_{int(time.time())}.png")
+            driver.save_screenshot(path)
+            LOGGER.info("Saved verification screenshot: %s", path)
+            return path
+        except (OSError, WebDriverException) as exception:
+            LOGGER.debug("Screenshot capture failed: %s", exception)
+            return None
+
+    def _try_restore_session(self, driver: webdriver.Remote) -> bool:
+        """Restore persisted cookies; True only when the session REALLY works.
+
+        The OPPO SPA redirects to the login page asynchronously, so checking
+        the URL right after navigation is a false positive — a dead session
+        still looks valid for a moment. Only ``window.$findVm`` appearing
+        proves the authenticated find app actually booted.
+        """
+        cookies = self._load_persisted_cookies()
+        if not cookies:
+            return False
+        try:
+            # A page on the target domain must be open before cookies can be set.
+            driver.get(CONF_OPPO_CLOUD_LOGIN_URL)
+            restored = 0
+            for cookie in cookies:
+                cookie = {
+                    key: value
+                    for key, value in cookie.items()
+                    if key
+                    in (
+                        "name",
+                        "value",
+                        "path",
+                        "domain",
+                        "secure",
+                        "httpOnly",
+                        "expiry",
+                        "sameSite",
+                    )
+                }
+                try:
+                    driver.add_cookie(cookie)
+                except WebDriverException:
+                    continue
+                restored += 1
+            LOGGER.info("Restored %d/%d persisted session cookies", restored, len(cookies))
+            driver.get(CONF_OPPO_CLOUD_FIND_URL)
+            # Wait for the SPA to settle: either the find app boots ($findVm)
+            # or the page bounces to the login screen.
+            try:
+                WebDriverWait(driver, 10).until(
+                    lambda d: d.execute_script("return !!window.$findVm")
+                    or "login" in (d.current_url or "")
+                )
+            except TimeoutException:
+                pass
+            if driver.execute_script("return !!window.$findVm"):
+                LOGGER.info("Persisted OPPO session still valid — login skipped")
+                return True
+            LOGGER.info(
+                "Persisted OPPO session expired (now at %s)", driver.current_url
+            )
+        except WebDriverException as exception:
+            LOGGER.warning("Session restore failed: %s", exception)
+        return False
+
+    def _scan_for_verification(
+        self, driver: webdriver.Remote, restore_frame=None
+    ) -> tuple[str, list[str]] | None:
+        """Scan page and nested iframes for an interactive verification widget.
+
+        Always scans from the default content frame so element references
+        never go stale across frame switches. SMS-style verify iframes are
+        skipped so the SMS flow keeps working. When ``restore_frame`` is
+        given (the login iframe element), the driver is switched back into
+        it afterwards so callers can keep using their frame context.
+        """
+        try:
+            driver.switch_to.default_content()
+            hit = _detect_verification(driver)
+            if hit:
+                return hit
+
+            for outer in driver.find_elements(By.CSS_SELECTOR, "iframe"):
+                if not _element_probe(outer)[0]:
+                    continue
+                try:
+                    driver.switch_to.frame(outer)
+                except WebDriverException:
+                    continue
+                try:
+                    hit = _detect_verification(driver)
+                    if hit:
+                        return hit
+                    # Nested verify iframe: only treat as graphic verification
+                    # when it is NOT the SMS-code form.
+                    for inner in driver.find_elements(
+                        By.CSS_SELECTOR, "iframe[name^='identify-']"
+                    ):
+                        if not _element_probe(inner)[0]:
+                            continue
+                        try:
+                            driver.switch_to.frame(inner)
+                        except WebDriverException:
+                            continue
+                        try:
+                            has_sms_ui = any(
+                                _element_probe(el)[0]
+                                for el in driver.find_elements(
+                                    By.CSS_SELECTOR,
+                                    ".uc-input-get-code-button, input[type='tel'][maxlength='6']",
+                                )
+                            )
+                            if has_sms_ui:
+                                continue
+                            hit = _detect_verification(driver)
+                            if hit:
+                                return hit
+                        finally:
+                            driver.switch_to.default_content()
+                            try:
+                                driver.switch_to.frame(outer)
+                            except WebDriverException:
+                                pass
+                finally:
+                    driver.switch_to.default_content()
+            return None
+        finally:
+            if restore_frame is not None:
+                try:
+                    driver.switch_to.default_content()
+                    driver.switch_to.frame(restore_frame)
+                except WebDriverException:
+                    pass
+
+    def _raise_verification_required(
+        self, driver: webdriver.Remote, kind: tuple[str, list[str]]
+    ) -> None:
+        """Log context and raise a manual-verification-required error."""
+        verification_type, evidence = kind
+        screenshot_path = self._capture_screenshot(driver, "verification_required")
+        body = ""
+        try:
+            driver.switch_to.default_content()
+            body = _body_text(driver, 200)
+        except WebDriverException:
+            pass
+        LOGGER.warning(
+            "OPPO Cloud requires manual %s verification (evidence: %s). "
+            "Complete it via the browser view at %s. body=%s",
+            verification_type,
+            ", ".join(evidence),
+            self._novnc_url or "(noVNC URL unknown)",
+            body,
+        )
+        if not self._verification_pending:
+            # First detection: open the manual-verification window now.
+            # Re-detections (polling) must NOT extend the deadline.
+            self._verification_pending = True
+            self._verification_deadline = time.monotonic() + MANUAL_VERIFY_TIMEOUT
+        raise OppoCloudApiClientVerificationRequiredError(
+            verification_type,
+            evidence=evidence,
+            novnc_url=self._novnc_url,
+            screenshot_path=screenshot_path,
+            detail="manual completion required",
+        )
+
+    def _wait_for_manual_verification(self, timeout: float) -> None:
+        """Poll the preserved session until a human completes the verification.
+
+        Returns silently once the login page is left behind (login completed).
+        Raises VerificationRequiredError on timeout with a clear message.
+        """
+        driver = self._get_or_create_driver()
+        deadline = time.monotonic() + timeout
+        last_state = ""
+        while time.monotonic() < deadline:
+            try:
+                url = driver.current_url
+            except WebDriverException:
+                url = ""
+            if url and not url.startswith(CONF_OPPO_CLOUD_LOGIN_URL):
+                LOGGER.info("Manual verification completed (now at %s)", url)
+                self._verification_pending = False
+                self._verification_deadline = 0.0
+                self._persist_cookies(driver)
+                return
+            try:
+                kind = self._scan_for_verification(driver)
+                state = f"{kind[0]}:{kind[1]}" if kind else "waiting"
+            except WebDriverException as exception:
+                kind = ("error", [str(exception)])
+                state = f"scan-error:{exception}"
+            if kind is None:
+                # Challenge cleared but login may still need a Sign in click
+                # to proceed — mirror the main login loop's step 3.
+                try:
+                    driver.switch_to.default_content()
+                    login_iframe = next(
+                        (
+                            el
+                            for el in driver.find_elements(By.CSS_SELECTOR, "iframe")
+                            if _element_probe(el)[0]
+                        ),
+                        None,
+                    )
+                    if login_iframe is not None:
+                        driver.switch_to.frame(login_iframe)
+                    for el in driver.find_elements(By.CSS_SELECTOR, "[role='button']"):
+                        displayed, text, cls = _element_probe(el)
+                        if (
+                            displayed
+                            and "Sign in" in text
+                            and "uc-button-disabled" not in cls
+                        ):
+                            el.click()
+                            LOGGER.info("Re-clicked Sign in after manual verification")
+                            break
+                except WebDriverException:
+                    pass
+            if state != last_state:
+                LOGGER.info("Waiting for manual verification... %s", state)
+                last_state = state
+            time.sleep(VERIFICATION_POLL_INTERVAL)
+        screenshot_path = self._capture_screenshot(driver, "verification_timeout")
+        msg = f"manual verification not completed within {timeout:.0f}s"
+        raise OppoCloudApiClientVerificationRequiredError(
+            "slider",
+            evidence=["timeout"],
+            novnc_url=self._novnc_url,
+            screenshot_path=screenshot_path,
+            detail=msg,
+        )
+
+    async def async_wait_for_manual_verification(
+        self, timeout: float = MANUAL_VERIFY_TIMEOUT
+    ) -> None:
+        """Async wrapper: wait for the human to finish the verification."""
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._wait_for_manual_verification, timeout
+        )
 
     def set_keep_browser_session(self, *, keep_session: bool) -> None:
         """Set whether to keep the browser session (synchronous version)."""
@@ -176,23 +604,41 @@ class OppoCloudApiClient:
             raise
 
     async def async_login_oppo_cloud(self, sms_code: str | None = None) -> None:
-        """Log in to OPPO Cloud using Selenium."""
-        try:
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._login_oppo_cloud, sms_code
-            )
-        except OppoCloudApiClientAuthenticationError:
-            raise
-        except OppoCloudApiClientCommunicationError:
-            raise
-        except OppoCloudApiClientSmsVerificationError:
-            raise
-        except TimeoutException as exception:
-            msg = f"login - {exception}"
-            raise OppoCloudApiClientError(msg) from exception
-        except Exception as exception:
-            msg = f"Unexpected login - {exception}"
-            raise OppoCloudApiClientError(msg) from exception
+        """Log in to OPPO Cloud using Selenium.
+
+        Transient failures (DOM races, page-load hiccups) are retried on a
+        fresh browser session; auth/CAPTCHA/SMS outcomes are not.
+        """
+        max_attempts = LOGIN_RETRY_ATTEMPTS
+        last_error: OppoCloudApiClientError | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._login_oppo_cloud, sms_code
+                )
+                return
+            except (
+                OppoCloudApiClientAuthenticationError,
+                OppoCloudApiClientCommunicationError,
+                OppoCloudApiClientSmsVerificationError,
+                OppoCloudApiClientVerificationRequiredError,
+            ):
+                raise
+            except TimeoutException as exception:
+                last_error = OppoCloudApiClientError(f"login - {exception}")
+            except Exception as exception:
+                last_error = OppoCloudApiClientError(f"Unexpected login - {exception}")
+            if attempt < max_attempts:
+                LOGGER.warning(
+                    "Login attempt %d/%d failed: %s — retrying with a fresh session",
+                    attempt,
+                    max_attempts,
+                    last_error,
+                )
+                # Drop the flaky driver so the retry starts clean.
+                await self.async_cleanup()
+                await asyncio.sleep(LOGIN_RETRY_BACKOFF)
+        raise last_error if last_error else OppoCloudApiClientError("login")
 
     def _complete_sms_verification(self, driver: webdriver.Remote, code: str) -> None:
         """
@@ -223,13 +669,18 @@ class OppoCloudApiClient:
             code_input,
         )
 
+        def _verify_ready(el) -> bool:
+            try:
+                return el.is_displayed() and el.get_attribute("aria-disabled") == "false"
+            except WebDriverException:
+                return False
+
         verify_btn = wait.until(
             lambda d: next(
                 (
                     el
                     for el in d.find_elements(By.CSS_SELECTOR, "._verifyButton")
-                    if el.is_displayed()
-                    and el.get_attribute("aria-disabled") == "false"
+                    if _verify_ready(el)
                 ),
                 None,
             )
@@ -248,16 +699,21 @@ class OppoCloudApiClient:
         """Enter SMS code and click Verify on preserved session."""
         driver = self._get_or_create_driver()
         driver.switch_to.default_content()
-        login_iframe = driver.find_element(By.CSS_SELECTOR, "iframe")
-        driver.switch_to.frame(login_iframe)
-        verify_iframe = driver.find_element(
-            By.CSS_SELECTOR, "iframe[name^='identify-']"
-        )
-        driver.switch_to.frame(verify_iframe)
+        try:
+            login_iframe = driver.find_element(By.CSS_SELECTOR, "iframe")
+            driver.switch_to.frame(login_iframe)
+            verify_iframe = driver.find_element(
+                By.CSS_SELECTOR, "iframe[name^='identify-']"
+            )
+            driver.switch_to.frame(verify_iframe)
+        except WebDriverException as exception:
+            raise OppoCloudApiClientAuthenticationError(
+                "SMS verification iframe is gone (session expired) — retry login"
+            ) from exception
 
         wait = WebDriverWait(driver, 10)
 
-        body_text = driver.find_element(By.TAG_NAME, "body").text[:500]
+        body_text = _body_text(driver)
         LOGGER.info("SMS iframe body: %s", body_text)
 
         code_input = wait.until(
@@ -275,18 +731,22 @@ class OppoCloudApiClient:
         )
 
         input_val = code_input.get_attribute("value") or ""
-        body_after = driver.find_element(By.TAG_NAME, "body").text[:500]
+        body_after = _body_text(driver)
         verify_btn = next(
             (
                 el
                 for el in driver.find_elements(By.CSS_SELECTOR, "._verifyButton")
-                if el.is_displayed()
+                if _element_probe(el)[0]
             ),
             None,
         )
-        aria_disabled = (
-            verify_btn.get_attribute("aria-disabled") if verify_btn else None
-        )
+        try:
+            aria_disabled = (
+                verify_btn.get_attribute("aria-disabled") if verify_btn else None
+            )
+        except WebDriverException:
+            verify_btn = None
+            aria_disabled = None
         LOGGER.info(
             "SMS verify state — input='%s', aria_disabled=%s, body=%s",
             input_val,
@@ -327,6 +787,34 @@ class OppoCloudApiClient:
         """Log in to OPPO Cloud using Selenium (sync)."""
         driver = self._get_or_create_driver()
         wait = WebDriverWait(driver, 10)  # default timeout
+
+        # A previous login attempt may be waiting for the human to finish an
+        # interactive verification. Never navigate away in that case — doing
+        # so would discard the user's progress on the slider.
+        if self._verification_pending and time.monotonic() < self._verification_deadline:
+            try:
+                current_url = driver.current_url
+            except WebDriverException:
+                current_url = ""
+            if current_url and not current_url.startswith(CONF_OPPO_CLOUD_LOGIN_URL):
+                LOGGER.info("Manual verification already completed (at %s)", current_url)
+                self._verification_pending = False
+                self._verification_deadline = 0.0
+                self._persist_cookies(driver)
+                return
+            # Still waiting for the human: surface the same clear error state.
+            kind = ("slider", ["manual-verification-pending"])
+            self._raise_verification_required(driver, kind)
+        if self._verification_pending:
+            # Deadline passed — give up on the stale attempt and start fresh.
+            LOGGER.info("Previous manual verification window expired, restarting login")
+            self._verification_pending = False
+            self._verification_deadline = 0.0
+
+        # Reuse a previously verified session when possible — avoids
+        # re-triggering the interactive security verification entirely.
+        if sms_code is None and self._try_restore_session(driver):
+            return
 
         driver.get(CONF_OPPO_CLOUD_LOGIN_URL)
         LOGGER.info("Navigated to OPPO Cloud login page")
@@ -408,22 +896,15 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                 # dialog mask still blocking the page during transition.
                 tos_dialog_visible = False
                 for dialog_el in driver.find_elements(By.CSS_SELECTOR, ".uc-dialog"):
-                    try:
-                        if dialog_el.is_displayed():
-                            tos_dialog_visible = True
-                            break
-                    except StaleElementReferenceException:
-                        continue
+                    if _element_probe(dialog_el)[0]:
+                        tos_dialog_visible = True
+                        break
                 tos_btn = None
                 for el in driver.find_elements(By.CSS_SELECTOR, "[role='button']"):
-                    try:
-                        if el.is_displayed() and "Agree and continue" in (
-                            el.text or ""
-                        ):
-                            tos_btn = el
-                            break
-                    except StaleElementReferenceException:
-                        continue
+                    displayed, text, _cls = _element_probe(el)
+                    if displayed and "Agree and continue" in text:
+                        tos_btn = el
+                        break
                 if tos_btn is not None or tos_dialog_visible:
                     if tos_btn is not None:
                         try:
@@ -434,7 +915,9 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                                 "{bubbles:true,cancelable:true,view:window}))",
                                 tos_btn,
                             )
-                        except StaleElementReferenceException:
+                        except WebDriverException:
+                            # Node detached mid-click (page re-rendered) —
+                            # just rescan on the next loop iteration.
                             continue
                         LOGGER.info("Agreed to ToS")
                         _tos_agreed_at = now
@@ -446,17 +929,15 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                                 )
                             )
                     else:
-                        # Dialog visible but no agree button
-                        # - could be a CAPTCHA / security verification overlay
-                        body_text = driver.find_element(By.TAG_NAME, "body").text[:500]
-                        if (
-                            "Security verification" in body_text
-                            or "security verification" in body_text
-                            or "Drag" in body_text
-                            or "slide" in body_text.lower()
-                        ):
-                            msg = "login, CAPTCHA or security verification required"
-                            raise OppoCloudApiClientAuthenticationError(msg)
+                        # Dialog visible but no agree button — could be a
+                        # graphic security verification overlay (slider etc.).
+                        # Do a structured scan (DOM fingerprints + text) and
+                        # hand the challenge to a human instead of guessing.
+                        kind = self._scan_for_verification(
+                            driver, restore_frame=login_iframe
+                        )
+                        if kind is not None:
+                            self._raise_verification_required(driver, kind)
                         LOGGER.debug("ToS dialog transition in progress, waiting")
                     _time.sleep(0.5)
                     continue
@@ -468,7 +949,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         for el in driver.find_elements(
                             By.CSS_SELECTOR, "iframe[name^='identify-']"
                         )
-                        if el.is_displayed()
+                        if _element_probe(el)[0]
                     ),
                     None,
                 )
@@ -481,7 +962,7 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                                 (By.CSS_SELECTOR, ".uc-input-get-code-button")
                             )
                         )
-                        body_text = driver.find_element(By.TAG_NAME, "body").text
+                        body_text = _body_text(driver)
                         LOGGER.info("SMS body text: %s", body_text[:200])
                         match = re.search(r"\+86\s*\d+\**\d+", body_text)
                         masked_phone = match.group() if match else "unknown phone"
@@ -491,26 +972,27 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                         raise OppoCloudApiClientSmsVerificationError(masked_phone)
 
                     self._complete_sms_verification(driver, sms_code)
+                    self._persist_cookies(driver)
                     break
 
                 # 3. Click enabled Sign in button (debounced after ToS)
                 if now - _tos_agreed_at >= _sign_in_debounce:
-                    sign_in_btn = next(
-                        (
-                            el
-                            for el in driver.find_elements(
-                                By.CSS_SELECTOR, "[role='button']"
-                            )
-                            if el.is_displayed()
-                            and "Sign in" in (el.text or "")
-                            and "uc-button-disabled"
-                            not in (el.get_attribute("class") or "")
-                        ),
-                        None,
-                    )
+                    sign_in_btn = None
+                    for el in driver.find_elements(By.CSS_SELECTOR, "[role='button']"):
+                        displayed, text, cls = _element_probe(el)
+                        if (
+                            displayed
+                            and "Sign in" in text
+                            and "uc-button-disabled" not in cls
+                        ):
+                            sign_in_btn = el
+                            break
                     if sign_in_btn is not None:
-                        with contextlib.suppress(StaleElementReferenceException):
+                        try:
                             sign_in_btn.click()
+                        except WebDriverException:
+                            # Detached mid-click — rescan next iteration.
+                            pass
                         _time.sleep(1)
                         continue
 
@@ -518,14 +1000,23 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                 try:
                     if not driver.current_url.startswith(CONF_OPPO_CLOUD_LOGIN_URL):
                         LOGGER.info("OPPO Cloud login successful")
+                        self._persist_cookies(driver)
                         return
                 except WebDriverException:
                     pass
 
                 _time.sleep(1)
             else:
+                # Deadline hit without success. Before reporting a generic
+                # auth error, re-check for a verification widget that may
+                # have appeared while we were looping — report it precisely.
+                kind = self._scan_for_verification(
+                    driver, restore_frame=login_iframe
+                )
+                if kind is not None:
+                    self._raise_verification_required(driver, kind)
                 captured = driver.execute_script("return window.__capturedErrors || []")
-                body = driver.find_element(By.TAG_NAME, "body").text[:300]
+                body = _body_text(driver, 300)
                 clean_captured = []
                 for s in captured:
                     normalized = " ".join(s.split())
@@ -542,10 +1033,13 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                 driver.switch_to.default_content()
 
     async def async_auth(self, sms_code: str | None = None) -> None:
-        """Authenticate — preserves session on SMS verification for retry."""
+        """Authenticate — preserves session on SMS/verification for retry."""
         try:
             await self.async_login_oppo_cloud(sms_code)
-        except OppoCloudApiClientSmsVerificationError:
+        except (
+            OppoCloudApiClientSmsVerificationError,
+            OppoCloudApiClientVerificationRequiredError,
+        ):
             raise
         except Exception:
             await self.async_cleanup()
@@ -553,29 +1047,57 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
 
     async def async_get_data(self) -> list[OppoCloudDevice]:
         """Get device location data from OPPO Cloud."""
+        sms_pending = False
+        verify_pending = False
         try:
             if not self._keep_session:
                 # not keeping session, must login every time
                 await self.async_login_oppo_cloud()
-            result = await asyncio.get_running_loop().run_in_executor(
+            return await self._async_fetch_devices()
+        except OppoCloudApiClientVerificationRequiredError:
+            # Keep the browser session so the human can complete the
+            # verification in the noVNC view and the next run resumes.
+            verify_pending = True
+            raise
+        except OppoCloudApiClientSmsVerificationError:
+            # Keep the browser session so the SMS code can be entered later.
+            sms_pending = True
+            raise
+        except OppoCloudApiClientAuthenticationError:
+            # Not logged in (or session dropped): one explicit re-login retry.
+            LOGGER.info("OPPO Cloud not logged in, attempting to log in")
+            try:
+                await self.async_login_oppo_cloud()
+            except OppoCloudApiClientSmsVerificationError:
+                sms_pending = True
+                raise
+            except OppoCloudApiClientVerificationRequiredError:
+                verify_pending = True
+                raise
+            return await self._async_fetch_devices()
+        finally:
+            # If not keeping session, cleanup after data fetch — unless an SMS
+            # or manual verification is pending and needs the preserved session.
+            if not self._keep_session and not sms_pending and not verify_pending:
+                await self.async_cleanup()
+
+    async def _async_fetch_devices(self) -> list[OppoCloudDevice]:
+        """Run the synchronous device scrape in the executor."""
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
                 None, self._get_devices_data
             )
-        except OppoCloudApiClientAuthenticationError:
-            # Not logged in, try to log in
-            LOGGER.info("OPPO Cloud not logged in, attempting to log in")
-            await self.async_login_oppo_cloud()
-            return await self.async_get_data()
+        except (
+            OppoCloudApiClientAuthenticationError,
+            OppoCloudApiClientSmsVerificationError,
+        ):
+            raise
         except TimeoutException as exception:
             msg = f"get_devices_data - {exception}"
             raise OppoCloudApiClientError(msg) from exception
         except Exception as exception:
             msg = f"Unexpected get_devices_data - {exception}"
             raise OppoCloudApiClientError(msg) from exception
-        finally:
-            # If not keeping session, cleanup after data fetch
-            if not self._keep_session:
-                await self.async_cleanup()
-        return result
 
     def _get_devices_data(self) -> list[OppoCloudDevice]:
         """Get device locations using Selenium WebDriver."""
@@ -583,24 +1105,43 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
         driver.get(CONF_OPPO_CLOUD_FIND_URL)
         wait = WebDriverWait(driver, 10)  # default timeout
 
+        # The find page is a SPA: the authenticated app object ($findVm) needs
+        # a moment to boot, and an expired session bounces to the login page
+        # asynchronously. Wait for one of the two outcomes before judging.
+        try:
+            WebDriverWait(driver, 20).until(
+                lambda d: d.execute_script("return !!window.$findVm")
+                or "login" in (d.current_url or "")
+            )
+        except TimeoutException:
+            pass
+
         # Check if redirected to login page
         if not driver.current_url.startswith(CONF_OPPO_CLOUD_FIND_URL):
             msg = "not logged in or page redirected unexpectedly"
+            raise OppoCloudApiClientAuthenticationError(msg)
+        if not driver.execute_script("return !!window.$findVm"):
+            # Still on the find URL but the app never booted — treat as
+            # auth/session loss (the SPA redirect is just slow), so the
+            # caller re-logins instead of silently reporting zero devices.
+            msg = "find page did not expose $findVm (session likely expired)"
             raise OppoCloudApiClientAuthenticationError(msg)
 
         # Wait for the page to finish refreshing GPS locations from phones.
         # otherwise we get old, server-side cached old data
 
         # Step 1: Wait for the loading overlay (div.device_location) to hide
+        def _overlay_gone(d) -> bool:
+            els = d.find_elements(By.CSS_SELECTOR, "div.device_location")
+            if not els:
+                return True
+            try:
+                return els[0].value_of_css_property("display") == "none"
+            except WebDriverException:
+                return True
+
         try:
-            wait.until(
-                lambda d: (
-                    d.find_element(
-                        By.CSS_SELECTOR, "div.device_location"
-                    ).value_of_css_property("display")
-                    == "none"
-                )
-            )
+            wait.until(_overlay_gone)
         except TimeoutException:
             LOGGER.warning("device_location overlay did not hide, continuing anyway")
 
@@ -619,17 +1160,22 @@ observer.observe(document, { childList: true, subtree: true, characterData: true
                     (By.CSS_SELECTOR, "#device-list .device-list ul > li")
                 )
             )
-            for item in device_items:
+        except TimeoutException:
+            device_items = []
+            LOGGER.warning("No device items found to click for details")
+        for item in device_items:
+            try:
                 driver.execute_script("arguments[0].click();", item)
-                with contextlib.suppress(TimeoutException):
-                    WebDriverWait(driver, 8).until(
-                        expected_conditions.presence_of_element_located(
-                            (By.CSS_SELECTOR, ".battery-wrapper")
-                        )
+            except WebDriverException as exception:
+                LOGGER.debug("Device item click failed: %s", exception)
+                continue
+            with contextlib.suppress(TimeoutException):
+                WebDriverWait(driver, 8).until(
+                    expected_conditions.presence_of_element_located(
+                        (By.CSS_SELECTOR, ".battery-wrapper")
                     )
-                time.sleep(1)
-        except WebDriverException as exception:
-            LOGGER.warning("Failed to click device item for details: %s", exception)
+                )
+            time.sleep(1)
 
         # Now read the fresh data from $findVm + battery from DOM
         device_data = driver.execute_script(

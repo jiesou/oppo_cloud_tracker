@@ -17,8 +17,16 @@ from .api import (
     OppoCloudApiClientCommunicationError,
     OppoCloudApiClientError,
     OppoCloudApiClientSmsVerificationError,
+    OppoCloudApiClientVerificationRequiredError,
 )
-from .const import CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL, DOMAIN, LOGGER
+from .const import (
+    CONF_REMOTE_BROWSER_URL,
+    DEFAULT_REMOTE_BROWSER_URL,
+    DOMAIN,
+    LOGGER,
+    MANUAL_VERIFY_TIMEOUT,
+    session_store_path,
+)
 
 
 class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -48,6 +56,11 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 LOGGER.info("SMS verification needed: %s", exception.masked_phone)
                 self._user_data = user_input
                 return await self.async_step_sms_code()
+            except OppoCloudApiClientVerificationRequiredError as exception:
+                LOGGER.warning("Manual verification needed: %s", exception)
+                self._user_data = user_input
+                self._verification_error = exception
+                return await self.async_step_manual_verify()
             except OppoCloudApiClientCommunicationError as exception:
                 LOGGER.error(exception)
                 _errors["base"] = "connection"
@@ -164,6 +177,84 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_manual_verify(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Wait for the human to finish the graphic verification in the browser.
+
+        The browser session is preserved on the Selenium Grid while the user
+        drags the slider via noVNC. Submitting the form polls that session
+        for up to MANUAL_VERIFY_TIMEOUT and resumes login when the challenge
+        is gone. Nothing here ever solves the CAPTCHA automatically.
+        """
+        errors: dict[str, str] = {}
+        creds = getattr(self, "_user_data", {})
+        client = getattr(self, "_auth_client", None)
+        verification = getattr(self, "_verification_error", None)
+
+        if user_input is not None:
+            if not client:
+                LOGGER.warning("Verification continue submitted but no active session")
+                errors["base"] = "unknown"
+            else:
+                try:
+                    await client.async_wait_for_manual_verification(
+                        timeout=MANUAL_VERIFY_TIMEOUT
+                    )
+                except OppoCloudApiClientVerificationRequiredError as exception:
+                    LOGGER.warning("Verification still pending: %s", exception)
+                    self._verification_error = exception
+                    errors["base"] = "verification_pending"
+                except OppoCloudApiClientSmsVerificationError as exception:
+                    LOGGER.info("SMS verification needed: %s", exception.masked_phone)
+                    return await self.async_step_sms_code()
+                except OppoCloudApiClientAuthenticationError as exception:
+                    LOGGER.warning(exception)
+                    errors["base"] = "auth"
+                except OppoCloudApiClientError as exception:
+                    LOGGER.exception(exception)
+                    errors["base"] = "unknown"
+                else:
+                    await client.async_cleanup()
+                    if self.reauth_entry:
+                        return self.async_update_reload_and_abort(
+                            self.reauth_entry,
+                            data_updates={
+                                CONF_USERNAME: creds[CONF_USERNAME],
+                                CONF_PASSWORD: creds[CONF_PASSWORD],
+                                CONF_REMOTE_BROWSER_URL: creds.get(
+                                    CONF_REMOTE_BROWSER_URL, DEFAULT_REMOTE_BROWSER_URL
+                                ),
+                            },
+                        )
+                    await self.async_set_unique_id(
+                        unique_id=slugify(creds[CONF_USERNAME])
+                    )
+                    self._abort_if_unique_id_configured()
+                    return self.async_create_entry(
+                        title=f"OPPO Cloud - {creds[CONF_USERNAME]}",
+                        data=creds,
+                    )
+
+        return self.async_show_form(
+            step_id="manual_verify",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("confirm", default=True): selector.BooleanSelector(),
+                },
+            ),
+            errors=errors,
+            description_placeholders={
+                "novnc_url": (verification.novnc_url if verification else "")
+                or "(Selenium Grid noVNC)",
+                "verification_type": (
+                    verification.verification_type if verification else "slider"
+                ),
+                "error_detail": str(verification) if verification else "",
+            },
+        )
+
     async def async_step_reauth(
         self, _: dict[str, Any]
     ) -> config_entries.ConfigFlowResult:
@@ -208,6 +299,11 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 self._user_data = user_input
                 return await self.async_step_sms_code()
+            except OppoCloudApiClientVerificationRequiredError as exception:
+                LOGGER.warning("Manual verification needed during reauth: %s", exception)
+                self._user_data = user_input
+                self._verification_error = exception
+                return await self.async_step_manual_verify()
             except OppoCloudApiClientCommunicationError as exception:
                 LOGGER.error(exception)
                 errors["base"] = "connection"
@@ -303,11 +399,19 @@ class OppoCloudFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             username=username,
             password=password,
             remote_browser_url=remote_browser_url,
+            # Share the same session store the runtime setup will use, so a
+            # manually verified session created during setup is not lost.
+            session_store_path=session_store_path(self.hass.config.path(), username),
         )
         # Test connection to Selenium Grid
         try:
             await client.async_auth()
-        except OppoCloudApiClientSmsVerificationError:
+        except (
+            OppoCloudApiClientSmsVerificationError,
+            OppoCloudApiClientVerificationRequiredError,
+        ):
+            # Keep the browser session so SMS / manual verification can be
+            # completed in a follow-up flow step.
             self._auth_client = client
             raise
         except Exception:

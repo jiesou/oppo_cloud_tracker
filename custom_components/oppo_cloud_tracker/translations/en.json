@@ -10,6 +10,20 @@
                     "password": "OPPO Password"
                 }
             },
+            "sms_code": {
+                "title": "SMS Verification",
+                "description": "OPPO Cloud sent a code to {masked_phone}. Enter the 6-digit code from the SMS.",
+                "data": {
+                    "sms_code": "SMS code"
+                }
+            },
+            "manual_verify": {
+                "title": "Security verification required",
+                "description": "OPPO Cloud requires an interactive {verification_type} verification (e.g. drag the slider). Open the browser view at {novnc_url}, complete the verification **manually**, then submit. The integration never solves the CAPTCHA automatically; the verified session is saved and reused.",
+                "data": {
+                    "confirm": "I completed the verification in the browser view"
+                }
+            },
             "reauth_confirm": {
                 "title": "Re-authenticate OPPO Cloud Tracker",
                 "description": "Your OPPO credentials have expired or are invalid. Please enter your updated credentials for account: {username}",
@@ -24,6 +38,8 @@
             "auth": "OPPO login failed {error_detail}",
             "connection": "Unable to connect to Remote Browser {error_detail}",
             "unknown": "An unknown error occurred {error_detail}",
+            "sms_code": "Incorrect or expired SMS code, please retry.",
+            "verification_pending": "Verification not finished yet — drag the slider / complete the graphic challenge in the browser view, then submit again.",
             "wrong_account": "The username does not match the existing account. Please use the same account or remove and re-add the integration."
         },
         "abort": {
@@ -58,6 +74,10 @@
         "locate": {
             "name": "Locate Devices",
             "description": "Trigger an immediate update of device locations from OPPO Cloud."
+        },
+        "resume_verification": {
+            "name": "Resume after manual verification",
+            "description": "Call after completing the slider/graphic verification in the Selenium browser view (noVNC) to poll the preserved session and continue login immediately."
         }
     }
 }
